@@ -166,12 +166,20 @@
     raw = raw.trim();
     if (!raw || raw === '}') return null;
 
+    // Expression-bodied members (`M() => expr;` / `P => expr;`): splitMembers gives
+    // them no block, so recover the body from the top-level `=>`. The char scan
+    // stops at the first top-level '=', leaving `> expr` in the tail.
     var eqPos = topLevelChar(raw, '=');
-    var declText = (eqPos >= 0 ? raw.slice(0, eqPos) : raw).trim();
     var initialValue = eqPos >= 0 ? raw.slice(eqPos + 1).trim() : '';
+    var exprBody = '';
+    if (/^>\s*/.test(initialValue)) {
+      exprBody = initialValue.replace(/^>\s*/, '').replace(/;\s*$/, '').trim();
+      initialValue = '';
+    }
+    var declText = (eqPos >= 0 ? raw.slice(0, eqPos) : raw).trim();
     var isMethod = declText.indexOf('(') >= 0 &&
       /^[A-Za-z_][\w<>,.?\[\]\s]*?\s+[A-Za-z_]\w*\s*(?:<[^>]*>)?\s*\(/.test(declText);
-    var isProperty = !!block && /\b(get|set|init)\b/.test(block) && !isMethod;
+    var isProperty = !isMethod && (block ? /\b(get|set|init)\b/.test(block) : !!exprBody);
     var kind, name, type, returnType = 'void', parameters = '', refs = [];
 
     if (isMethod) {
@@ -223,7 +231,7 @@
     member.category = categoryFor(member);
     // Method bodies and property accessor bodies are scanned once per project
     // by extractBodyUsages (cross-file, needs the global member-name index).
-    if ((isMethod || isProperty) && block) member._body = block;
+    if ((isMethod || isProperty) && (block || exprBody)) member._body = block || exprBody;
     return { member: member, refs: refs };
   }
 
@@ -338,6 +346,8 @@
         var snip = snippetOf(body, idx);
 
         // Attribute the reference to a declaring class when the receiver resolves.
+        // （receiverChain.expr 已是不含最后成员的接收者表达式；解析不到类型的
+        // 引用 type 为空串，trace/refCount/导出层一律不计入，避免同名误报。）
         var type = '';
         if (chain.dotted && chain.expr) {
           type = resolveChain(chain.expr.split('.')) || '';

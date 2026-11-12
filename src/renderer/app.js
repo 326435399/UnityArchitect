@@ -569,7 +569,7 @@
       });
     });
     function usesOf(map, sourceKey, name) {
-      return (map[(sourceKey || '') + '#' + name] || []).concat(map['#' + name] || []);
+      return map[(sourceKey || '') + '#' + name] || []; // 接收者解析不到类型的一律不计入
     }
     function names(list) {
       return (list || []).map(function (x) {
@@ -684,7 +684,7 @@
     '<li><b>事件追踪 ⚡</b>：只追踪你点的那个类里的事件，两个类都写了同名的 <code>Changed</code> 也不会串（如 <code>G1State.Changed</code> 与 <code>TowerGameState.Changed</code> 各自独立）</li>',
     '<li>追踪时节点上直接标角色：<b>定义 / 激活</b> 标在声明并触发它的类上，<b>注册</b> 标在调用它的方法（如 <code>Bind</code>）旁边，并画出「注册 / 激活 → 定义」的箭头；激活发生在别的类时同样补一条箭头</li>',
     '<li><b>数据流向 ⇥</b>：列依次是「字段类型」（最左，这个字段指向的对象）、「声明」（含初始值）、「写入」、「读取」；即使引用都发生在同一个类里，也能看到它指向的类型对象</li>',
-    '<li><b>方法 ⇥</b>：左列「定义」、右列「调用」；方法组引用（如 <code>+= Refresh</code>）也算一处引用</li>',
+    '<li><b>方法 ⇥</b>：左列「定义」、右列「调用」；方法组引用（如 <code>+= Refresh</code>）也算一处引用。只按接收者类型归因——解析不了接收者的引用（反射、局部变量上的调用）一律不计入，工具类里的 <code>set.Contains(...)</code> 不会被误算成别的类的同名方法</li>',
     '<li>再点一次同一按钮（或 Esc）退出追踪并还原布局</li>',
     '</ul>',
     '<h4>四、Assembly 分层视图</h4>',

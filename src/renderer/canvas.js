@@ -49,6 +49,12 @@
       var key = n.id + '|' + n.members.length + '|' + project().settings.showMembers + '|' + (expanded ? 'x' : 'd');
       if (!geoCache[key]) {
         var m = Layout.measureNode(n, { showMembers: project().settings.showMembers, expanded: expanded });
+        // 类名必须完整显示：追踪模式有角色徽章时标题预算被压缩（g.w-116），
+        // 长类名会被截断成省略号 —— 按实际字体测量把节点加宽到放得下为止。
+        var roles = (app.traceRoles && app.traceRoles[n.id]) || [];
+        ctx.font = '500 13px "Segoe UI", "Microsoft YaHei", sans-serif';
+        var need = Math.ceil(ctx.measureText(n.name).width) + (roles.length ? 116 : 62) + 12;
+        if (need > m.w) m.w = need;
         geoCache[key] = { x: n.position.x, y: n.position.y, w: m.w, h: m.h, rows: m.rows, node: n };
       }
       return geoCache[key];

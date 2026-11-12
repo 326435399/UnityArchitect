@@ -181,21 +181,14 @@
     project.nodes.forEach(function (n) {
       if (defIds.has(n.id)) (n.members || []).forEach(function (m) { if (m.kind === 'event' && m.name === name) defKeys.add(n.sourceKey); });
     });
-    // Every class that declares a same-name event: used to drop unresolved
-    // references coming from the *other* Changed when only one is traced.
-    var sameNameDeclKeys = new Set();
-    project.nodes.forEach(function (n) {
-      if ((n.members || []).some(function (m) { return m.kind === 'event' && m.name === name; })) sameNameDeclKeys.add(n.sourceKey);
-    });
+    // Every class that declares a same-name event — kept only for the
+    // definitions pass below; unresolved refs are never attributed (they would
+    // turn any same-name call anywhere into a false subscriber/firer).
     collectRefs(project).forEach(function (it) {
       var u = it.ref;
       if (u.name !== name) return;
       if (u.action !== 'fire' && u.action !== 'subscribe' && u.action !== 'unsubscribe') return;
-      if (u.type) {
-        if (!defKeys.has(u.type)) return; // resolved to a different same-name member
-      } else if (typeKey && it.owner.sourceKey !== typeKey && sameNameDeclKeys.has(it.owner.sourceKey)) {
-        return; // unresolved ref living in another class that owns its own Changed
-      }
+      if (!defKeys.has(u.type)) return; // receiver unresolved or a different same-name member
       var bucket = u.action === 'fire' ? res.firers : res.subscribers;
       var entry = entryFor(bucket, it.owner);
       if (entry.methods.indexOf(it.member.name) < 0) entry.methods.push(it.member.name);
@@ -391,7 +384,7 @@
     collectRefs(project).forEach(function (it) {
       var u = it.ref;
       if (u.name !== name || (u.action !== 'write' && u.action !== 'read')) return;
-      if (u.type && !defKeys.has(u.type)) return; // belongs to a different same-name member
+      if (!defKeys.has(u.type)) return; // receiver unresolved or a different same-name member
       var entry = entryFor(u.action === 'write' ? res.writers : res.readers, it.owner);
       if (entry.methods.indexOf(it.member.name) < 0) entry.methods.push(it.member.name);
       entry.details = entry.details || [];
@@ -498,7 +491,7 @@
     collectRefs(project).forEach(function (it) {
       var u = it.ref;
       if (u.name !== name || (u.action !== 'call' && u.action !== 'read')) return;
-      if (u.type && !defKeys.has(u.type)) return;
+      if (!defKeys.has(u.type)) return; // receiver unresolved or a different same-name member
       var bucket = u.action === 'call' ? res.callers : res.readers;
       var entry = entryFor(bucket, it.owner);
       if (entry.methods.indexOf(it.member.name) < 0) entry.methods.push(it.member.name);
@@ -526,7 +519,7 @@
     collectRefs(project).forEach(function (it) {
       var u = it.ref;
       if (u.name !== memberName) return;
-      if (u.type && typeKey && u.type !== typeKey) return;
+      if (u.type !== typeKey) return; // unresolved receivers are never attributed
       n++;
     });
     return n;

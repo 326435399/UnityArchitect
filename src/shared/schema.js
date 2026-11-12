@@ -7,7 +7,7 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
 
-  var APP_VERSION = '2.7.1';
+  var APP_VERSION = '2.7.2';
 
   /* ==================================================================
    * 关于页信息（帮助 → 关于）

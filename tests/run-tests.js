@@ -290,6 +290,51 @@ try {
     'traceMethod finds the same-class call (ApplyDamage -> TakeDamage)');
   ok(Analysis.refCount(project, g1State.sourceKey, 'Changed') >= 3, 'refCount counts definition-adjacent uses');
 
+  // 回归：接收者类型解析不到时（set.Contains / SimpleTypes.Contains 这类对
+  // .NET 内置类型的调用），引用不得归到任何声明了同名成员的工程类头上，
+  // 否则「谁都会调用」的工具方法会污染整个引用追踪视图。
+  section('receiver-resolved references (no name-only fallback)');
+  var A_KEY = 'cs:utest#A', B_KEY = 'cs:utest#B';
+  function fakeMember(o) {
+    return Object.assign({
+      id: 't#u#m', kind: 'method', name: 'm', access: 'private', type: '',
+      parameters: '', returnType: 'void', isStatic: false, isSerialized: false,
+      modifiers: '', attributes: [], note: ''
+    }, o);
+  }
+  var scanMem = [
+    fakeMember({ id: 't#u#f1', kind: 'field', name: 'set', type: 'Dictionary<string,bool>' }),
+    fakeMember({ id: 't#u#f2', kind: 'field', name: 'SimpleTypes', type: 'HashSet<Type>' }),
+    fakeMember({ id: 't#u#f3', kind: 'field', name: 'other', type: 'B' }),
+    fakeMember({ id: 't#u#m1', name: 'OwnScan', parameters: '', returnType: 'void' }),
+    fakeMember({
+      id: 't#u#Scan', name: 'Scan', parameters: '', returnType: 'void',
+      _body: ' bool v = set.Contains(p.Name); SimpleTypes.Contains(t); OwnScan(); other.Contains(x);'
+    })
+  ];
+  Cs.extractBodyUsages(scanMem, A_KEY, {
+    methodNames: { Contains: true, OwnScan: true },
+    fieldPropNames: {},
+    memberTypes: (function () {
+      var mt = Object.create(null);
+      mt[A_KEY] = (function () { var t = Object.create(null); t.set = 'Dictionary<string,bool>'; t.SimpleTypes = 'HashSet<Type>'; t.other = 'B'; t.OwnScan = 'void'; return t; })();
+      mt[B_KEY] = (function () { var t = Object.create(null); t.Contains = 'bool'; return t; })();
+      return mt;
+    })(),
+    resolveSimple: function (n) { return n === 'A' ? A_KEY : (n === 'B' ? B_KEY : null); }
+  });
+  var scanRefs = scanMem[4].memberRefs || [];
+  ok(scanRefs.some(function (u) { return u.name === 'Contains' && u.type === B_KEY && u.via === 'other'; }),
+    'other.Contains(x) resolves to the field declared type B', scanRefs);
+  ok(scanRefs.filter(function (u) { return u.name === 'Contains' && u.via !== 'other'; })
+      .every(function (u) { return u.type === ''; }),
+    'unresolved set.Contains / SimpleTypes.Contains carry empty type (never attributed)',
+    scanRefs.filter(function (u) { return u.name === 'Contains'; }));
+  ok(scanRefs.some(function (u) { return u.name === 'OwnScan' && u.type === A_KEY; }),
+    'bare own-method call is attributed to the owner class');
+  ok(!scanRefs.some(function (u) { return u.name === 'OwnScan' && u.type === ''; }),
+    'no name-only fallback for own-method calls');
+
   // ---------------------------------------------------------------- assembly layers
   section('assembly layered view');
   ok(Array.isArray(project.assemblies) && project.assemblies.length >= 3, 'asmdef metadata stored', project.assemblies && project.assemblies.length);
