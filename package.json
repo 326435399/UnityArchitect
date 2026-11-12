@@ -1,0 +1,37 @@
+{
+  "name": "unity-architect",
+  "productName": "Unity Architect",
+  "version": "2.7.1",
+  "description": "Unity 引用关系梳理与 UML 架构分析桌面工具",
+  "main": "electron/main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "test": "node tests/run-tests.js",
+    "check": "node tests/syntax-check.js",
+    "build:html": "node tools/build-standalone.js",
+    "build:app": "node tools/pack-portable.js",
+    "release": "node tools/release.js",
+    "verify": "node tests/syntax-check.js && node tests/run-tests.js && node tests/browser-scan-test.js && node tests/standalone-check.js",
+    "build:win": "electron-builder --win --x64",
+    "pack:win": "node tools/pack-portable.js"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.unityarchitect.desktop",
+    "productName": "Unity Architect",
+    "files": [
+      "electron/**/*",
+      "src/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": ["nsis", "portable"],
+      "artifactName": "UnityArchitect-${version}-${arch}.${ext}"
+    }
+  }
+}

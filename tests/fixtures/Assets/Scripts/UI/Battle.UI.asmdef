@@ -1,0 +1,6 @@
+{
+  "name": "Battle.UI",
+  "references": [
+    "Battle.Data"
+  ]
+}

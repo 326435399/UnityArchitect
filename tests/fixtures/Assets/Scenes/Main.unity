@@ -1,0 +1,39 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &500000
+GameObject:
+  m_Name: GameRoot
+  m_Component:
+  - component: {fileID: 500001}
+  - component: {fileID: 600000}
+--- !u!4 &500001
+Transform:
+  m_GameObject: {fileID: 500000}
+--- !u!114 &600000
+MonoBehaviour:
+  m_GameObject: {fileID: 500000}
+  m_Script: {fileID: 11500000, guid: 11111111111111111111111111111111, type: 3}
+  playerPrefab: {fileID: 100100000, guid: 77777777777777777777777777777777, type: 3}
+--- !u!1 &800000
+GameObject:
+  m_Name: EventSystem
+  m_Component:
+  - component: {fileID: 800001}
+  - component: {fileID: 800002}
+  - component: {fileID: 800003}
+--- !u!4 &800001
+Transform:
+  m_GameObject: {fileID: 800000}
+--- !u!114 &800002
+MonoBehaviour:
+  m_GameObject: {fileID: 800000}
+  m_Script: {fileID: 11500000, guid: a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1, type: 3}
+--- !u!114 &800003
+MonoBehaviour:
+  m_GameObject: {fileID: 800000}
+  m_Script: {fileID: 11500000, guid: a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2, type: 3}
+--- !u!1001 &700000
+PrefabInstance:
+  m_Modification:
+    m_TransformParent: {fileID: 500001}
+  m_SourcePrefab: {fileID: 100100000, guid: 77777777777777777777777777777777, type: 3}

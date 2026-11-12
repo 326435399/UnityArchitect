@@ -1,0 +1,8 @@
+{
+  "name": "Battle.Runtime",
+  "references": [
+    "Battle.UI"
+  ],
+  "includePlatforms": [],
+  "excludePlatforms": []
+}

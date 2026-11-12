@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:;">
+<title>Unity Architect</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body data-theme="light">
+<div id="app">
+  <header class="titlebar">
+    <div class="brand"><span class="brand-mark"></span><span>Unity Architect</span><span class="ver" id="app-version"></span></div>
+    <div class="project-name" id="project-name">未扫描 Unity 工程</div>
+    <div class="project-path" id="project-path"></div>
+  </header>
+
+  <nav class="menubar" id="menubar">
+    <button data-menu="file">文件</button>
+    <button data-menu="view">视图</button>
+    <button data-menu="analyze">分析</button>
+    <button data-menu="help">帮助</button>
+    <span class="menubar-spacer"></span>
+    <span class="hint" id="desktop-hint"></span>
+  </nav>
+
+  <div class="toolbar">
+    <button class="tbtn primary" data-action="scan">扫描 Unity 工程</button>
+    <button class="tbtn" data-action="rescan" title="重新读取上次绑定的工程目录，无需再选目录">重新扫描</button>
+    <span class="sep"></span>
+    <button class="tbtn" data-action="layout-layered">分层布局</button>
+    <button class="tbtn" data-action="fit">适应画布</button>
+    <span class="sep"></span>
+    <button class="tbtn" data-action="show-all" title="显示全部节点">全部显示</button>
+    <button class="tbtn" data-action="hide-all" title="隐藏全部节点">全部隐藏</button>
+    <button class="tbtn" data-action="isolate" title="选中节点后点击：只显示它与直接引用的对象；再点一次退出并还原">孤立选中</button>
+    <span class="sep"></span>
+    <button class="tbtn" data-action="focus" title="选中节点后点击：只保留它和引用关系，左上游、右下游重新排布；再点一次退出">聚焦依赖</button>
+    <button class="tbtn" data-action="trace-event" title="选中含事件的节点后点击：追踪该事件的定义 / 注册 / 激活，三列聚拢展示触发链；再点一次退出">事件追踪</button>
+    <button class="tbtn" data-action="trace-field" title="选中节点后点击：追踪变量/属性的所有引用（声明 / 写入 / 读取）；再点一次退出">数据流向</button>
+    <button class="tbtn" data-action="highlight-member" data-id="event" title="把所有 C# 事件成员的文字换成醒目颜色；再点一次恢复默认">事件</button>
+    <button class="tbtn" data-action="highlight-member" data-id="coroutine" title="把所有协程成员的文字换成醒目颜色；再点一次恢复默认">协程</button>
+    <button class="tbtn" data-action="highlight-member" data-id="unityEvent" title="把所有 UnityEvent 成员的文字换成醒目颜色；再点一次恢复默认">UnityEvent</button>
+    <button class="tbtn" data-action="highlight-member" data-id="delegate" title="把所有委托成员的文字换成醒目颜色；再点一次恢复默认">委托</button>
+    <button class="tbtn" data-action="layout-assembly" title="按 AssemblyDefinition 把脚本分成竖向层带，主链左对齐一列，其余层带放右侧；再点一次退出">Assembly 分层</button>
+    <span class="sep"></span>
+    <button class="tbtn" data-action="export-png">PNG</button>
+    <button class="tbtn" data-action="export-md">Markdown</button>
+    <span class="grow"></span>
+    <button class="tbtn" data-action="theme">主题</button>
+    <button class="tbtn" data-action="settings">设置</button>
+  </div>
+
+  <div class="workspace">
+    <aside class="panel left-panel">
+      <div class="panel-search"><input id="global-search" class="global-search" placeholder="全局检索  Ctrl+K" autocomplete="off"></div>
+      <div class="panel-search"><input id="tree-search" placeholder="筛选资源 / 成员" autocomplete="off"></div>
+      <div class="panel-tabs" data-panel="left">
+        <button class="active" data-tab="resources">资源</button>
+        <button data-tab="filters">筛选</button>
+        <button data-tab="search">检索</button>
+      </div>
+      <div class="panel-body" id="left-body"></div>
+    </aside>
+
+    <main class="canvas-wrap" id="canvas-wrap">
+      <div class="canvas-tools">
+        <button data-action="zoom-in">+</button>
+        <button data-action="zoom-out">−</button>
+        <button data-action="fit">⤢</button>
+        <span id="zoom-label">100%</span>
+      </div>
+      <div class="legend" id="legend"></div>
+    </main>
+
+    <aside class="panel right-panel">
+      <div class="panel-tabs" data-panel="right">
+        <button class="active" data-tab="inspector">检查器</button>
+        <button data-tab="deps">依赖分析</button>
+        <button data-tab="project">工程</button>
+      </div>
+      <div class="panel-body" id="right-body"></div>
+    </aside>
+  </div>
+
+  <footer class="statusbar">
+    <span id="status-left">就绪</span>
+    <span class="grow"></span>
+    <span id="status-stats"></span>
+    <span class="sep"></span>
+    <span id="status-scan"></span>
+  </footer>
+</div>
+
+<div id="drop-overlay" class="drop-overlay hidden">
+  <div class="drop-card">
+    <b>松手即读取 Unity 工程</b>
+    <span>拖入工程根目录或 Assets 文件夹，自动解析 .cs / .prefab / .unity / .asset / .meta</span>
+  </div>
+</div>
+
+<div id="modal-root"></div>
+<div id="context-menu" class="context-menu hidden"></div>
+<div id="toast" class="toast hidden"></div>
+<input type="file" id="dir-input" hidden webkitdirectory directory multiple>
+
+<script src="../shared/schema.js"></script>
+<script src="../shared/model.js"></script>
+<script src="../shared/cs-parser.js"></script>
+<script src="../shared/unity-parser.js"></script>
+<script src="../shared/analysis.js"></script>
+<script src="../shared/layout.js"></script>
+<script src="bridge.js"></script>
+<script src="canvas.js"></script>
+<script src="ui.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

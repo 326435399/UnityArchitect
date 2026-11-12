@@ -1,0 +1,22 @@
+# 依赖与构建产物（可再生成，不入库）
+node_modules/
+.electron-cache/
+dist/
+UnityArchitect-standalone.html
+*.zip
+
+# 测试产物
+tests/.probe/
+tests/.smoke-result.json
+
+# 本地私有数据（真实工程快照 / 内部文档等，非公开）
+tests/.mini.json
+internal/
+
+# 系统与编辑器
+.DS_Store
+Thumbs.db
+desktop.ini
+*.log
+.idea/
+.vscode/

@@ -1,0 +1,7 @@
+{
+  "name": "Battle.Core",
+  "references": [
+    "f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6",
+    "Battle.UI"
+  ]
+}

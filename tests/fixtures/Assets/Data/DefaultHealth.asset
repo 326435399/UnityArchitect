@@ -1,0 +1,7 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_Name: DefaultHealth
+  m_Script: {fileID: 11500000, guid: 44444444444444444444444444444444, type: 3}
+  maxHp: 100
