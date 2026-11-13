@@ -96,7 +96,8 @@
     var menu = el('context-menu');
     menu.innerHTML = items.map(function (it, i) {
       if (it.sep) return '<hr>';
-      return '<button data-mi="' + i + '"' + (it.danger ? ' style="color:var(--danger)"' : '') + '>' + esc(it.label) + '</button>';
+      return '<button data-mi="' + i + '"' + (it.danger ? ' style="color:var(--danger)"' : '') + '>' + esc(it.label) +
+        (it.key ? '<span class="mkey">' + esc(it.key) + '</span>' : '') + '</button>';
     }).join('');
     menu.style.left = Math.min(x, root.innerWidth - 190) + 'px';
     menu.style.top = Math.min(y, root.innerHeight - items.length * 30 - 30) + 'px';
@@ -334,7 +335,6 @@
       (n.outer ? '<div class="kv"><label>嵌套于</label><input value="' + esc(n.outer) + '" disabled></div>' : '') +
       '<div class="kv"><label>基类</label><input value="' + esc(n.baseTypes.join(', ')) + '" disabled></div>' +
       '<div class="kv"><label>文件路径</label><input value="' + esc(n.filePath || '—') + '" disabled></div>' +
-      '<div class="kv"><label>批注</label><textarea data-field="nodeNote" data-id="' + esc(n.id) + '" placeholder="重新扫描会保留这里的批注">' + esc(n.note) + '</textarea></div>' +
       '</div><div class="kv" style="margin-top:8px"><button class="tbtn" data-action="goto" data-id="' + esc(n.id) + '">定位</button>' +
       '<button class="tbtn" data-action="focus">聚焦依赖</button></div></div>' +
       '<div class="card"><h3>成员 · ' + n.members.length + '</h3>' + (memberHtml || '<div class="empty" style="padding:8px">暂无成员</div>') + '</div>' +

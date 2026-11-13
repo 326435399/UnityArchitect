@@ -153,6 +153,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); }
 .context-menu { position: absolute; z-index: 50; min-width: 176px; padding: 5px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel); box-shadow: var(--shadow); }
 .context-menu button { display: block; width: 100%; text-align: left; padding: 6px 10px; border-radius: 5px; font-size: 12px; color: var(--text); }
 .context-menu button:hover { background: var(--accent-soft); color: var(--accent-text); }
+.context-menu .mkey { float: right; margin-left: 12px; padding: 0 5px; border-radius: 4px; border: 1px solid var(--border); font-size: 10px; color: var(--text3); background: var(--panel-alt, transparent); }
 .context-menu hr { border: none; border-top: 1px solid var(--border); margin: 4px 2px; }
 .toast { position: absolute; z-index: 60; bottom: 44px; left: 50%; transform: translateX(-50%); padding: 8px 16px; border-radius: 8px; background: #252B33; color: #F2F5F8; font-size: 12px; box-shadow: var(--shadow); }
 .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 14px; }

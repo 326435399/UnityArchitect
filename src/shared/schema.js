@@ -7,7 +7,7 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
 
-  var APP_VERSION = '2.8.1';
+  var APP_VERSION = '2.9.0';
 
   /* ==================================================================
    * 关于页信息（帮助 → 关于）
@@ -53,7 +53,9 @@
   /** 追踪角色配色：画布徽章与追踪箭头共用一份，避免两处漂移。 */
   var ROLE_TONE = {
     '定义': '#3FB950', '激活': '#E0A040', '注册': '#58A6FF', '注销': '#8B949E',
-    '写入': '#F85149', '读取': '#39D2C0', '调用': '#A371F7', '字段类型': '#A371F7'
+    '写入': '#F85149', '读取': '#39D2C0', '调用': '#A371F7', '字段类型': '#A371F7',
+    '组合': '#58A6FF', '聚合': '#39D2C0', '序列化': '#3FB950', '依赖': '#8B949E',
+    '继承': '#E0A040', '实现': '#E0A040', '引用': '#A371F7'
   };
 
   /** 成员高亮按钮：把某类"复杂"成员的文字换成醒目颜色，便于一眼定位。 */
@@ -109,7 +111,7 @@
       nodes: [],
       edges: [],
       assemblies: [],
-      view: { scale: 1, offsetX: 0, offsetY: 0, theme: 'light' },
+      view: { scale: 1, offsetX: 0, offsetY: 0, theme: 'dark' },
       settings: {
         showMembers: true,
         layout: 'layered',
@@ -133,6 +135,7 @@
       if (Number.isFinite(raw.view.scale)) p.view.scale = clamp(raw.view.scale, 0.1, 4);
       if (Number.isFinite(raw.view.offsetX)) p.view.offsetX = raw.view.offsetX;
       if (Number.isFinite(raw.view.offsetY)) p.view.offsetY = raw.view.offsetY;
+      // 默认黑色主题；存档里显式存了主题值则恢复（界面可切换明暗）。
       if (raw.view.theme === 'dark' || raw.view.theme === 'light') p.view.theme = raw.view.theme;
     }
     if (raw.settings && typeof raw.settings === 'object') {

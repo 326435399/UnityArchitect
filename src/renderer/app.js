@@ -183,14 +183,29 @@
   app.onContextMenu = function (x, y, hit) {
     var items = [];
     if (hit.type === 'node' || hit.type === 'member') {
+      // 右键即选中：菜单里的定位/聚焦/追踪都以被右键的节点为准。
+      app.setSelection(new Set([hit.nodeId]), null, hit.type === 'member' ? hit.id : null);
       var n = Model.getNode(project, hit.nodeId);
+      var mem = (hit.type === 'member' && n) ? n.members.find(function (m) { return m.id === hit.id; }) : null;
+      var inFocus = app.canvasMode === 'focus';
       items = [
-        { label: '定位到 ' + (n ? n.name : ''), action: 'goto', data: { id: hit.nodeId } },
-        { label: '聚焦依赖', action: 'focus', data: {} },
-        { label: '编辑批注…', action: 'edit-note', data: { id: hit.nodeId } },
-        { sep: true },
-        { label: '隐藏节点', action: 'toggle-visible', data: { id: hit.nodeId } }
+        { label: '定位到 ' + (n ? n.name : ''), action: 'goto', data: { id: hit.nodeId }, key: 'F' },
+        { label: inFocus ? '取消聚焦依赖' : '聚焦依赖', action: inFocus ? 'unfocus' : 'focus', key: 'G' }
       ];
+      if (mem && (mem.kind === 'field' || mem.kind === 'property')) {
+        items.push({ label: '数据流向 · ' + mem.name, action: 'trace-field',
+          data: { field: mem.name, type: n.sourceKey || '' }, key: 'T' });
+      } else if (mem && mem.kind === 'method') {
+        items.push({ label: '方法追踪 · ' + mem.name, action: 'trace-method',
+          data: { method: mem.name, type: n.sourceKey || '' }, key: 'T' });
+      } else {
+        items.push({ label: '数据流向', action: 'trace-field', data: {}, key: 'T' });
+      }
+      if (mem && mem.kind === 'event') {
+        items.push({ label: '事件追踪 · ' + mem.name, action: 'trace-event',
+          data: { event: mem.name, type: n.sourceKey || '' } });
+      }
+      items.push({ sep: true }, { label: '隐藏节点', action: 'toggle-visible', data: { id: hit.nodeId } });
     } else if (hit.type === 'edge') {
       items = [
         { label: '查看关系', action: 'select-edge', data: { id: hit.id } }
@@ -221,10 +236,6 @@
       return;
     }
     if (field === 'layout') { project.settings.layout = value; return; }
-    if (field === 'nodeNote' && id) {
-      var node = Model.getNode(project, id);
-      if (node) mutate(function () { node.note = value; });
-    }
   };
 
   // ------------------------------------------------------------------ actions
@@ -237,7 +248,8 @@
       var result = Model.mergeScan(project, parsed, { removeStale: true });
       addedCount = result.addedNodes.length;
       purgedCount = result.staleNodes.length;
-      project.meta.name = rootPath || project.meta.name;
+      // 工程名只取目录名，完整路径放 unityRoot，避免标题重复显示两遍路径。
+      project.meta.name = rootPath ? rootPath.replace(/[\\/]+$/, '').split(/[\\/]/).pop() : project.meta.name;
       project.meta.unityRoot = rootPath || project.meta.unityRoot;
       if (addedCount > 0) {
         var layout = project.settings.layout === 'grid' ? Layout.gridLayout(project) : Layout.layeredLayout(project);
@@ -270,7 +282,7 @@
         (parsed.stats.unknownGuids ? '<div class="notice warn">有 ' + parsed.stats.unknownGuids + ' 个 GUID 未解析（可能来自 Packages 或未纳入的目录）</div>' : '') +
         (parsed.stats.unresolvedScriptComps ? '<div class="notice warn">有 ' + parsed.stats.unresolvedScriptComps + ' 个脚本组件未能识别名称：官方包脚本（EventSystem 等）需选择<b>工程根目录</b>重新扫描（包含 Library），也可能来自已删除脚本的失效引用</div>' : '') +
         (parsed.warnings.length ? '<div class="notice warn">解析提示 ' + parsed.warnings.length + ' 条，例如：' + esc(parsed.warnings[0].text) + '</div>' : '') +
-        '<div class="notice info">批注与布局位置会在重新扫描时保留。</div>',
+        '<div class="notice info">布局位置会在重新扫描时保留。</div>',
       buttons: [{ label: '完成', primary: true }]
     });
   }
@@ -299,6 +311,30 @@
     }).catch(showScanError);
   }
 
+  /** Focus edge kind → role badge text (drawn next to the referencing member row). */
+  var FOCUS_ROLE = {
+    compose: '组合', aggregate: '聚合', serialize: '序列化', depend: '依赖',
+    use: '引用', event: '引用', inherit: '继承', implement: '实现'
+  };
+
+  /** Focus mode member badges: mark which member of each neighbour references the focused type. */
+  function buildFocusRoles(fid, keep) {
+    var roles = Object.create(null);
+    project.edges.forEach(function (e) {
+      var holder;
+      if (e.to === fid && keep.has(e.from)) holder = e.from;        // neighbour references focus
+      else if (e.from === fid && keep.has(e.to)) holder = e.from;   // focus references neighbour
+      else return;
+      var node = Model.getNode(project, holder);
+      if (!node) return;
+      var text = FOCUS_ROLE[e.kind] || '引用';
+      var memberName = e.label && (node.members || []).some(function (m) { return m.name === e.label; })
+        ? e.label : null;
+      addRole(roles, holder, text, memberName);
+    });
+    return roles;
+  }
+
   /** Focus mode: re-layout only the dependency neighbourhood (upstream left, downstream right). */
   function applyFocusLayout(fid, depth, side) {
     if (!Model.getNode(project, fid)) return;
@@ -314,6 +350,7 @@
     app.focusSide = side;
     app.focusDepth = depth;
     app.canvasMode = 'focus';
+    app.traceRoles = buildFocusRoles(fid, keep);
     if (canvas) { canvas.invalidateGeo(); canvas.render(); }
     UI.renderAll(app);
     setTimeout(function () { if (canvas) canvas.fit(); }, 20);
@@ -600,7 +637,6 @@
       if (n.namespace) lines.push('- 命名空间：`' + n.namespace + '`');
       if (n.filePath) lines.push('- 文件：`' + n.filePath + '`');
       if (n.baseTypes.length) lines.push('- 基类 / 接口：' + n.baseTypes.join(', '));
-      if (n.note) lines.push('- 批注：' + n.note);
       var mounts = project.edges.filter(function (e) { return e.kind === 'attach' && e.to === n.id && byId[e.from]; });
       if (mounts.length) {
         lines.push('- 挂载于：' + mounts.map(function (e) {
@@ -676,11 +712,11 @@
     '<li>每次扫描固定覆盖三类内容：<b>脚本</b>（.cs 类型、成员、脚本间依赖）、<b>场景与预制体挂载</b>（脚本挂在哪些 GameObject 上）、<b>SO 资源实例</b>（.asset 文件解析成资源节点，并按序列化字段名连出引用线）</li>',
     '<li>贴图、音频、材质等其余资源一律不导入；AssemblyDefinition（.asmdef）只作为<b>分层元数据</b>读取，不生成节点；Unity 自身的 ProjectSettings / Packages / Library 也永远不会导入</li>',
     '<li>左栏「筛选 → 层级（一键切换）」：扫描后不改文件、即时切换画布显示层级（仅脚本 / 含挂载 / 全部）</li>',
-    '<li>删除过的脚本重新扫描后自动清除，批注与布局位置会保留</li>',
+    '<li>删除过的脚本重新扫描后自动清除，布局位置会保留</li>',
     '</ul>',
     '<h4>三、查找所有引用（Visual Studio 式）</h4>',
     '<ul style="padding-left:18px">',
-    '<li>检查器里每个成员旁都有按钮：变量/属性 ⇥、事件 ⚡、方法 ⇥；点击即在画布上把<b>所有引用位置</b>聚拢成列，并在右侧列出每个引用的<b>类、方法与代码行</b>（就像 VS 的「查找所有引用」结果列表）</li>',
+    '<li>检查器里每个成员旁都有按钮：变量/属性 ⇥、事件 ⚡、方法 ⇥；点击即在画布上把<b>所有引用位置</b>聚拢成列，并在右侧列出每个引用的<b>类、方法与代码行</b>（就像 VS 的「查找所有引用」结果列表）；<b>右键成员行</b>的菜单里也有同样的入口，或用快捷键 <b>T</b> 对选中节点的字段开数据流向</li>',
     '<li><b>事件追踪 ⚡</b>：只追踪你点的那个类里的事件，两个类都写了同名的 <code>Changed</code> 也不会串（如 <code>G1State.Changed</code> 与 <code>TowerGameState.Changed</code> 各自独立）</li>',
     '<li>追踪时节点上直接标角色：<b>定义 / 激活</b> 标在声明并触发它的类上，<b>注册</b> 标在调用它的方法（如 <code>Bind</code>）旁边，并画出「注册 / 激活 → 定义」的箭头；激活发生在别的类时同样补一条箭头</li>',
     '<li><b>数据流向 ⇥</b>：列依次是「字段类型」（最左，这个字段指向的对象）、「声明」（含初始值）、「写入」、「读取」；即使引用都发生在同一个类里，也能看到它指向的类型对象</li>',
@@ -696,8 +732,9 @@
     '<ul style="padding-left:18px">',
     '<li>工具栏 <b>事件 / 协程 / UnityEvent / 委托</b> 四个高亮开关：点亮的类别成员文字变醒目颜色并加粗，再点一次恢复</li>',
     '<li>聚焦依赖 / 事件追踪 / 数据流向 / Assembly 分层 / 孤立选中 是<b>互斥模式</b>：切入新模式时旧模式自动退出还原，当前模式按钮持续发光；再点一次（或 Esc）退出</li>',
+    '<li>右键菜单：<b>定位到（F）</b>、<b>聚焦依赖 / 取消聚焦依赖（G）</b>、<b>数据流向（T）</b>；右键到成员行时追踪直接对准该成员</li>',
     '<li>滚轮缩放、空白处拖动平移、节点拖拽移动、框选多选、双击节点定位；Ctrl+K 全局检索、Ctrl+A 全选、F 适应画布、Esc 退出当前模式</li>',
-    '<li>右上「主题」切换明暗；小地图可在「筛选 → 显示」里关闭</li>',
+    '<li>默认黑色主题，右上「主题」可切换明暗；小地图可在「筛选 → 显示」里关闭</li>',
     '</ul>',
     '<h4>六、导出</h4>',
     '<ul style="padding-left:18px">',
@@ -747,15 +784,6 @@
         if (canvas) canvas.fit(); UI.toast('布局已更新');
         break;
       case 'select-edge': app.setSelection(new Set(), id, null); app.setTab('right', 'inspector'); break;
-      case 'edit-note': {
-        var n0 = Model.getNode(project, id);
-        UI.modal({ title: '批注 · ' + (n0 ? n0.name : ''), body: '<textarea id="note-text" style="width:100%;min-height:110px">' + esc(n0 ? n0.note : '') + '</textarea><div class="notice info">重新扫描 Unity 工程时，批注不会被覆盖。</div>',
-          buttons: [{ label: '取消' }, { label: '保存', primary: true, onClick: function (host) {
-            var v = host.querySelector('#note-text').value;
-            mutate(function () { var n = Model.getNode(project, id); if (n) n.note = v; });
-          } }] });
-        break;
-      }
       case 'goto':
         if (!id) break;
         app.setSelection(new Set([id]), null, null);
@@ -988,8 +1016,16 @@
       if (ctrl && e.key.toLowerCase() === 'a') { e.preventDefault(); app.setSelection(new Set(project.nodes.map(function (n) { return n.id; }))); return; }
       if (typing) return;
       if (e.key === 'Escape') { action('unfocus'); UI.hideContext(); return; }
-      if (e.key.toLowerCase() === 'f') { action('fit'); return; }
-      if (e.key.toLowerCase() === 'l') { action('layout-layered'); return; }
+      var k = e.key.toLowerCase();
+      if (k === 'f') {
+        // F：定位到当前选中节点；没有选中时退化为适应画布。
+        if (app.selection.size) action('goto', { id: Array.from(app.selection)[0] });
+        else action('fit');
+        return;
+      }
+      if (k === 'g') { action('focus'); return; }   // G：聚焦依赖 ⇄ 取消聚焦
+      if (k === 't') { action('trace-field'); return; } // T：数据流向（选中节点的字段）
+      if (k === 'l') { action('layout-layered'); return; }
     });
   }
 
