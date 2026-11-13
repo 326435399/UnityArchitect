@@ -331,6 +331,7 @@
       (n.stale ? '<span class="pill danger">已失效</span>' : '') + '</div>' +
       '<div style="margin-top:10px">' +
       '<div class="kv"><label>命名空间</label><input value="' + esc(n.namespace) + '" disabled></div>' +
+      (n.outer ? '<div class="kv"><label>嵌套于</label><input value="' + esc(n.outer) + '" disabled></div>' : '') +
       '<div class="kv"><label>基类</label><input value="' + esc(n.baseTypes.join(', ')) + '" disabled></div>' +
       '<div class="kv"><label>文件路径</label><input value="' + esc(n.filePath || '—') + '" disabled></div>' +
       '<div class="kv"><label>批注</label><textarea data-field="nodeNote" data-id="' + esc(n.id) + '" placeholder="重新扫描会保留这里的批注">' + esc(n.note) + '</textarea></div>' +

@@ -72,6 +72,8 @@ npm run release    # 一键打包：检查 + 测试 + 网页版 + exe + 分发 z
 
 Windows 下双击仓库根目录的 **`一键打包.cmd`** 等同 `npm run release`。
 
+打包时自动把 `assets/icon.ico` 写入 exe（任务栏 / 标题栏 / 文件图标）并设置产品名；更换图标只需替换 `assets/icons/icon-*.png`（或运行 `electron tools/build-icon.js <新图片>` 从任意图片重新生成圆形图标）。
+
 ## 扫描范围
 
 | 纳入 | 说明 |

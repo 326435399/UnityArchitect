@@ -294,6 +294,7 @@
         if (t.attributes.some(function (a) { return /DisallowMultipleComponent|RequireComponent/.test(a); })) tags.push('Component');
         pushNode(makeNode(t.sourceKey, kind, t.name, {
           fullName: t.fullName, namespace: t.namespace, baseTypes: t.baseTypes,
+          outer: t.outer || '',
           filePath: t.filePath, tags: tags, assembly: asmNameForPath(t.filePath),
           members: t.members.map(function (m) {
             return {
@@ -311,8 +312,37 @@
       });
     });
 
+    // 取容器类型最后一个顶层类型参数：Dictionary<string, TrackedRow> → 'TrackedRow'
+    function lastTypeArg(inner) {
+      var parts = [], depth = 0, start = 0;
+      for (var i = 0; i < inner.length; i++) {
+        var c = inner.charAt(i);
+        if (c === '<' || c === '[') depth++;
+        else if (c === '>') depth = Math.max(0, depth - 1);
+        else if (c === ',' && depth === 0) { parts.push(inner.slice(start, i)); start = i + 1; }
+      }
+      parts.push(inner.slice(start));
+      var args = parts.map(function (x) { return x.trim(); }).filter(Boolean);
+      return args.length ? args[args.length - 1] : '';
+    }
+
     function resolveType(name) {
-      return typeByFull[name] || typeBySimple[name] || typeBySimple[String(name).replace(/<.*$/, '')] || null;
+      var raw = typeByFull[name] || typeBySimple[name];
+      if (raw) return raw;
+      var stripped = String(name).replace(/<[\s\S]*$/, '').replace(/\[\s*\]$/, '').trim();
+      var byStrip = typeBySimple[stripped] || null;
+      if (byStrip) return byStrip;
+      // 容器类型（List<T> / T[] / Dictionary<K,T>）解析失败时再试元素类型：
+      // 引用容器等于引用其元素的数据类型。
+      if (stripped !== name) {
+        var m = /<([\s\S]*)>\s*\[\s*\]$|<([\s\S]*)>$/.exec(String(name));
+        var el = m ? (m[1] || m[2]) : '';
+        if (el) {
+          var last = lastTypeArg(el);
+          return (typeByFull[last] || typeBySimple[last]) || null;
+        }
+      }
+      return null;
     }
 
     // ---- inheritance / type references ----------------------------------

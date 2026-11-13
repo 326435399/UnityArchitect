@@ -7,6 +7,7 @@ const scanner = require('./scanner');
 let win = null;
 const isDev = process.argv.includes('--dev');
 const isSmoke = process.argv.includes('--smoke');
+const APP_ICON = path.join(__dirname, '..', 'assets', 'icon.ico');
 const SMOKE_RESULT = path.join(__dirname, '..', 'tests', '.smoke-result.json');
 
 function writeSmoke(code, payload) {
@@ -70,6 +71,7 @@ function createWindow() {
   win = new BrowserWindow({
     width: 1520, height: 940, minWidth: 1080, minHeight: 660,
     title: 'Unity Architect', backgroundColor: '#F4F5F7', show: false,
+    icon: fs.existsSync(APP_ICON) ? APP_ICON : undefined,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true, nodeIntegration: false, sandbox: false

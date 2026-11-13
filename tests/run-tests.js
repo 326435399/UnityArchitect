@@ -40,7 +40,8 @@ try {
   section('C# parser');
   var pcPath = 'Assets/Scripts/Player/PlayerController.cs';
   var cs = Cs.parseCsFile(pcPath, Fixtures.FILES[pcPath]);
-  eq(cs.types.length, 2, 'two top-level types in one file');
+  eq(cs.types.filter(function (t) { return !t.outer; }).length, 2, 'two top-level types in one file');
+  ok(cs.types.some(function (t) { return t.name === 'Stats' && /PlayerController$/.test(t.outer); }), 'nested type carries its outer type');
   ok(cs.types.some(function (t) { return t.name === 'IDamageable' && t.kind === 'interface'; }), 'interface detected');
   var pc = cs.types.find(function (t) { return t.name === 'PlayerController'; });
   ok(!!pc, 'PlayerController detected');
@@ -405,6 +406,27 @@ try {
   ok((tf.typeClasses || []).some(function (t) { return t.name === 'PlayerController'; }),
     'field trace exposes the declared type class', tf.typeClasses);
   eq(Analysis.traceField(project, '不存在的字段').definitions.length, 0, 'traceField of unknown field is empty');
+  // 容器字段的数据类型 = 元素类型（List<T> / T[] / Dictionary<K,T> 都引用 T）
+  var obsTrace = Analysis.traceField(project, 'observers', pcNode.sourceKey);
+  ok(obsTrace.typeClasses.some(function (t) { return t.name === 'GameManager'; }),
+    'List<GameManager> field exposes element type GameManager', obsTrace.typeClasses);
+  var arrTrace = Analysis.traceField(project, 'configList', pcNode.sourceKey);
+  ok(arrTrace.typeClasses.some(function (t) { return t.name === 'HealthData'; }),
+    'HealthData[] field exposes element type HealthData', arrTrace.typeClasses);
+  var dictTrace = Analysis.traceField(project, 'configMap', pcNode.sourceKey);
+  ok(dictTrace.typeClasses.some(function (t) { return t.name === 'HealthData'; }),
+    'Dictionary<string,HealthData> field exposes value type HealthData', dictTrace.typeClasses);
+  // 嵌套类：作为独立节点存在，且被 List<Inner> 字段引用
+  var statsNode = project.nodes.find(function (n) { return n.name === 'Stats'; });
+  ok(!!statsNode, 'nested class becomes its own node');
+  ok(statsNode && /PlayerController$/.test(statsNode.outer || ''), 'nested node records its outer type', statsNode && statsNode.outer);
+  ok(statsNode && /\.PlayerController\.Stats$/.test(statsNode.fullName || ''), 'nested full name is Outer.Inner', statsNode && statsNode.fullName);
+  ok(!pcNode.members.some(function (m) { return m.name === 'Stats'; }), 'nested type is not parsed as a field of the outer class');
+  ok(project.edges.some(function (e) { return e.from === pcNode.id && e.to === (statsNode || {}).id && e.kind === 'aggregate'; }),
+    'List<Stats> field creates an aggregate edge to the nested type');
+  var statsTrace = Analysis.traceField(project, 'stats', pcNode.sourceKey);
+  ok(statsTrace.typeClasses.some(function (t) { return t.name === 'Stats'; }),
+    'List<Stats> field exposes nested element type Stats', statsTrace.typeClasses);
   var ftl = Layout.fieldTraceLayout(project, tf);
   ok(ftl.ids.length >= 1 && Number.isFinite(ftl.positions[gm.id].x), 'field trace layout positions');
   ok(ftl.columnBounds.some(function (b) { return b.label === '字段类型'; }), 'field trace layout adds a type column');

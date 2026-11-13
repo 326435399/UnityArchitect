@@ -7,7 +7,7 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
 
-  var APP_VERSION = '2.7.2';
+  var APP_VERSION = '2.8.1';
 
   /* ==================================================================
    * 关于页信息（帮助 → 关于）
@@ -186,6 +186,7 @@
       name: n.name,
       fullName: typeof n.fullName === 'string' ? n.fullName : n.name,
       namespace: typeof n.namespace === 'string' ? n.namespace : '',
+      outer: typeof n.outer === 'string' ? n.outer : '',
       baseTypes: Array.isArray(n.baseTypes) ? n.baseTypes.filter(isString) : [],
       guid: typeof n.guid === 'string' ? n.guid : '',
       filePath: typeof n.filePath === 'string' ? n.filePath : '',

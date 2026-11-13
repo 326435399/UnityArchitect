@@ -292,6 +292,40 @@
     return edges;
   }
 
+  /** Actual data element type of a declared member type:
+   *  TrackedRow[] / List<TrackedRow> / IReadOnlyList<TrackedRow> /
+   *  Dictionary<string, TrackedRow> / Nullable<TrackedRow> → 'TrackedRow'.
+   *  容器（数组/列表/字典/可空）只是包装，数据类型取元素类型；
+   *  字典取最后一个类型参数（值类型），嵌套泛型递归解包。 */
+  function splitTypeArgs(s) {
+    var parts = [], depth = 0, start = 0;
+    for (var i = 0; i < s.length; i++) {
+      var c = s.charAt(i);
+      if (c === '<' || c === '(' || c === '[') depth++;
+      else if (c === '>' || c === ')' || c === ']') depth = Math.max(0, depth - 1);
+      else if (c === ',' && depth === 0) { parts.push(s.slice(start, i)); start = i + 1; }
+    }
+    parts.push(s.slice(start));
+    return parts.map(function (x) { return x.trim(); }).filter(Boolean);
+  }
+
+  function elementTypeOf(typeStr) {
+    var t = String(typeStr || '').trim();
+    for (var guard = 0; guard < 8; guard++) {
+      var arr = /\[\s*\]$/.exec(t);
+      if (arr) { t = t.slice(0, arr.index).trim(); continue; }
+      var g = /<([\s\S]*)>$/.exec(t);
+      if (g) {
+        var args = splitTypeArgs(g[1]);
+        if (!args.length) return '';
+        t = args[args.length - 1];
+        continue;
+      }
+      return t.replace(/\?\s*$/, '').trim();
+    }
+    return t;
+  }
+
   function holderToEntry(project, byKey, holder) {
     var rest = String(holder).slice(2); // strip 'f:' / 'p:'
     var cut = rest.indexOf('\u0001');
@@ -372,7 +406,7 @@
         return (m.kind === 'field' || m.kind === 'property') && m.name === name;
       });
       if (!mem) return;
-      var rtype = String(mem.type || '').replace(/<.*$/, '').replace(/\[\s*\]$/, '').trim();
+      var rtype = elementTypeOf(mem.type);
       if (!rtype) return;
       var typeNode = project.nodes.find(function (x) { return x.name === rtype && x.kind !== 'enum'; });
       if (typeNode && !res.typeClasses.some(function (x) { return x.id === typeNode.id; })) {
@@ -438,7 +472,7 @@
         return (m.kind === 'field' || m.kind === 'property') && m.name === name;
       });
       if (!mem) return;
-      var rtype = String(mem.type || '').replace(/<.*$/, '').replace(/\[\s*\]$/, '').trim();
+      var rtype = elementTypeOf(mem.type);
       if (!rtype) return;
       var typeNode = project.nodes.find(function (x) { return x.name === rtype; });
       if (!typeNode) return;

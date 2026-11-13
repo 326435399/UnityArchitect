@@ -76,15 +76,20 @@
 
   function cleanType(t) {
     return String(t || '').replace(/\s+/g, ' ').trim()
+      .replace(/\s+\[\s*\]/g, '[]')
       .replace(/\bwhere\b.*$/, '').replace(/\?/g, '').trim();
   }
 
   function extractTypeNames(typeExpr) {
     var names = [];
+    var src = String(typeExpr || '');
     var re = /[A-Za-z_]\w*/g, m;
-    while ((m = re.exec(typeExpr || '')) !== null) {
+    while ((m = re.exec(src)) !== null) {
       var w = m[0];
       if (PRIMITIVES.has(w) || MODIFIERS.has(w) || w === 'typeof' || w.length === 1) continue;
+      // 点号链（Ns.Type / Outer.Inner）只算最后一段：前缀是限定名，不是被引用的类型。
+      var after = src.slice(m.index + w.length).replace(/^\s+/, '');
+      if (after.charAt(0) === '.') continue;
       if (names.indexOf(w) < 0) names.push(w);
     }
     return names;
@@ -165,6 +170,8 @@
     }
     raw = raw.trim();
     if (!raw || raw === '}') return null;
+    // `public class Inner {}`：修饰符剥掉后仍是类型声明，不能当成字段。
+    if (/^(class|interface|struct|enum|delegate|namespace)\b/.test(raw)) return null;
 
     // Expression-bodied members (`M() => expr;` / `P => expr;`): splitMembers gives
     // them no block, so recover the body from the top-level `=>`. The char scan
@@ -205,7 +212,11 @@
       var nm = /([A-Za-z_]\w*)\s*(?:\[\s*\])?\s*$/.exec(first);
       if (!nm) return null;
       name = nm[1];
-      type = cleanType(first.slice(0, nm.index) + (/\]\s*$/.test(first.slice(0, nm.index)) ? '[]' : ''));
+      var prefix = first.slice(0, nm.index);
+      // C 风格数组（int x[]）：[] 跟在名字后面，需要补回类型串；
+      // 前缀已带 [] 时不能重复追加，否则会得到 "HealthData[] []"。
+      var cStyleArray = /\[\s*\]\s*$/.test(nm[0]) && !/\]\s*$/.test(prefix);
+      type = cleanType(prefix + (cStyleArray ? '[]' : ''));
       if (!type) type = 'var';
       var container = Array.from(CONTAINERS).some(function (c) { return type.indexOf(c) === 0; }) || /\[\s*\]\s*$/.test(first);
       kind = isEventKw || UNITY_EVENT.test(type) ? 'event' : (isProperty ? 'property' : 'field');
@@ -489,21 +500,26 @@
     var typeRe = /\b(class|interface|struct|enum)\s+([A-Za-z_]\w*)\s*(?:<([^<>]*(?:<[^<>]*>[^<>]*)*)>)?\s*(?::\s*([^{;]+?))?\s*\{/g;
     var types = [], m;
     var usedKeys = Object.create(null);
+    var typeSpans = []; // registered type bodies, used to detect nesting parents
     var normPath = String(path || '').replace(/\\/g, '/');
 
     while ((m = typeRe.exec(src)) !== null) {
       var open = src.lastIndexOf('{', m.index + m[0].length - 1);
       var close = pairs[open];
       if (!Number.isFinite(close)) { warnings.push({ type: 'unbalanced', text: m[2] }); continue; }
-      // Skip types nested inside another type body.
-      var nested = types.some(function (t) { return m.index > t._start && m.index < t._end; });
-      if (nested) { warnings.push({ type: 'nestedType', text: m[2] }); continue; }
+      // Nested types are real types too: keep them as their own nodes with a
+      // dotted full name (Outer.Inner), so `List<Inner>` fields resolve.
+      var parent = null, parentSpan = Infinity;
+      typeSpans.forEach(function (s) {
+        if (m.index > s.start && m.index < s.end && (s.end - s.start) < parentSpan) { parent = s; parentSpan = s.end - s.start; }
+      });
       var ns = namespaceAt(nsRanges, m.index);
-      var fullName = ns ? ns + '.' + m[2] : m[2];
+      var fullName = parent ? parent.fullName + '.' + m[2] : (ns ? ns + '.' + m[2] : m[2]);
       var kind = m[1] === 'interface' ? 'interface' : (m[1] === 'struct' ? 'struct' : (m[1] === 'enum' ? 'enum' : 'class'));
       var key = 'cs:' + normPath + '#' + fullName;
       if (usedKeys[key]) continue;
       usedKeys[key] = true;
+      typeSpans.push({ start: open, end: close, fullName: fullName });
 
       var baseTypes = [];
       var baseRaw = (m[4] || '').split(/\bwhere\b/)[0];
@@ -545,10 +561,13 @@
 
       types.push({
         sourceKey: key, name: m[2], fullName: fullName, namespace: ns, kind: kind,
+        outer: parent ? parent.fullName : '',
         filePath: normPath, baseTypes: baseTypes, attributes: typeAttrs,
         members: members, refs: refs, _start: open, _end: close
       });
-      typeRe.lastIndex = close + 1;
+      // Continue inside the body so nested type declarations are matched too;
+      // their own lastIndex jump keeps the scan linear.
+      typeRe.lastIndex = open + 1;
     }
     types.forEach(function (t) { delete t._start; delete t._end; });
     return { path: normPath, types: types, warnings: warnings };

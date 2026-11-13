@@ -35,6 +35,30 @@ fs.mkdirSync(appDir, { recursive: true });
 fs.copyFileSync(path.join(root, 'package.json'), path.join(appDir, 'package.json'));
 copyDir(path.join(root, 'electron'), path.join(appDir, 'electron'));
 copyDir(path.join(root, 'src'), path.join(appDir, 'src'));
+if (fs.existsSync(path.join(root, 'assets'))) copyDir(path.join(root, 'assets'), path.join(appDir, 'assets'));
+
+// 写入应用图标与产品信息（resedit 纯 JS 修改 PE 资源，无需 rcedit 原生依赖）
+const icoPath = path.join(root, 'assets', 'icon.ico');
+if (fs.existsSync(icoPath)) {
+  const ResEdit = require('resedit');
+  const exePath = path.join(out, exeName);
+  const exe = ResEdit.NtExecutable.from(fs.readFileSync(exePath));
+  const res = ResEdit.NtExecutableResource.from(exe);
+  const iconFile = ResEdit.Data.IconFile.from(fs.readFileSync(icoPath));
+  const iconData = iconFile.icons.map((item) => item.data);
+  const groups = ResEdit.Resource.IconGroupEntry.fromEntries(res.entries);
+  groups.forEach((g) => ResEdit.Resource.IconGroupEntry.replaceIconsForResource(res.entries, g.id, g.lang || 1033, iconData));
+  ResEdit.Resource.VersionInfo.fromEntries(res.entries).forEach(function (vi) {
+    vi.setStringValues({ lang: 1033, codepage: 1200 }, {
+      FileDescription: 'Unity Architect',
+      ProductName: 'Unity Architect'
+    });
+    vi.outputToResourceEntries(res.entries);
+  });
+  res.outputResource(exe);
+  fs.writeFileSync(exePath, Buffer.from(exe.generate()));
+  console.log('Applied app icon + product info to ' + exeName);
+}
 
 const launcher = [
   '@echo off',
