@@ -115,6 +115,7 @@
         id: existingEdge ? existingEdge.id : S.genId('edge'),
         from: fromNode.id, to: toNode.id, kind: rawEdge.kind,
         sourceMember: rawEdge.sourceMember || '',
+        sourceComp: rawEdge.sourceComp || '',
         targetMember: rawEdge.targetMember || '',
         label: rawEdge.label || '', sourceKey: key, manual: false, stale: false
       };
@@ -145,7 +146,7 @@
     // Deduplicate identical edges.
     var seen = Object.create(null);
     project.edges = project.edges.filter(function (e) {
-      var k = [e.from, e.to, e.kind, e.sourceMember].join('|');
+      var k = [e.from, e.to, e.kind, e.sourceMember, e.sourceComp].join('|');
       if (seen[k]) return false;
       seen[k] = true;
       return true;
@@ -169,7 +170,7 @@
       edges: project.edges.map(function (e) {
         var a = getNode(project, e.from), b = getNode(project, e.to);
         return { from: a ? (a.sourceKey || a.id) : e.from, to: b ? (b.sourceKey || b.id) : e.to,
-          kind: e.kind, member: e.sourceMember };
+          kind: e.kind, member: e.sourceMember, comp: e.sourceComp || '' };
       })
     };
   }
@@ -187,7 +188,7 @@
                oldNodes[k].name !== newNodes[k].name) out.changedNodes.push(newNodes[k]);
     });
     Object.keys(oldNodes).forEach(function (k) { if (!newNodes[k]) out.removedNodes.push(oldNodes[k]); });
-    var edgeKey = function (e) { return [e.from, e.to, e.kind, e.member].join('|'); };
+    var edgeKey = function (e) { return [e.from, e.to, e.kind, e.member, e.comp].join('|'); };
     var oldE = new Set(oldFp.edges.map(edgeKey));
     var newE = new Set(newFp.edges.map(edgeKey));
     newFp.edges.forEach(function (e) { if (!oldE.has(edgeKey(e))) out.addedEdges.push(e); });

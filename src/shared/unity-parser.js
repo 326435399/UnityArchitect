@@ -87,7 +87,8 @@
   var SCALAR_RE_CACHE = Object.create(null);
   function findScalar(body, key) {
     var re = SCALAR_RE_CACHE[key];
-    if (!re) re = SCALAR_RE_CACHE[key] = new RegExp('^\\s*' + key + ':\\s*(.+)$', 'm');
+    // 值必须与键同行：`m_Name:` 为空时 \s* 会吞掉换行，把下一行（如 m_EditorClassIdentifier:）误当值
+    if (!re) re = SCALAR_RE_CACHE[key] = new RegExp('^\\s*' + key + ':[ \\t]*(.+)$', 'm');
     var m = re.exec(body);
     return m ? m[1].trim() : '';
   }
@@ -155,18 +156,21 @@
       if (!d) d = docsCache[f.path] = parseYamlDocuments(f.content);
       return d;
     }
-    var nodes = [], edges = [], nodeKeys = Object.create(null);
+    var nodes = [], edges = [], nodeKeys = Object.create(null), nodeBySourceKey = Object.create(null);
     function pushNode(n) {
       if (!n.sourceKey || nodeKeys[n.sourceKey]) return null;
       nodeKeys[n.sourceKey] = true;
+      nodeBySourceKey[n.sourceKey] = n;
       nodes.push(n);
       return n;
     }
-    function pushEdge(fromKey, toKey, kind, sourceMember, label) {
+    function pushEdge(fromKey, toKey, kind, sourceMember, label, targetMember, sourceComp) {
       if (!fromKey || !toKey || fromKey === toKey) return;
-      var key = 'auto:' + kind + ':' + fromKey + '>' + toKey + ':' + (sourceMember || '');
+      // sourceComp 参与去重键：两个不同组件的同名字段（都叫 Data Base）是两条独立引用
+      var key = 'auto:' + kind + ':' + fromKey + '>' + toKey + ':' + (sourceMember || '') + ':' + (sourceComp || '');
       edges.push({ sourceKey: key, fromKey: fromKey, toKey: toKey, kind: kind,
-        sourceMember: sourceMember || '', label: label || '' });
+        sourceMember: sourceMember || '', label: label || '', targetMember: targetMember || '',
+        sourceComp: sourceComp || '' });
     }
 
     // ---- C# types -------------------------------------------------------
@@ -426,6 +430,7 @@
 
       var nodeByKey = Object.create(null);
       var compsByGo = Object.create(null);
+      var compNameByFileId = Object.create(null);
 
       function goKeyOfDoc(doc) {
         if (!doc) return '';
@@ -481,8 +486,25 @@
           var typeKey = csGuidToType[sg] || '';
           var goId = gameObjectId(d.body);
           var goKey = goId ? (docByFileId[goId] ? docByFileId[goId].key : 'asset:' + f.path + '#' + goId) : key;
-          if (typeKey) pushEdge(goKey, typeKey, 'attach', '', '挂载 ' + name);
-          ownerKey = goKey;
+          if (typeKey) {
+            // 脚本组件实例升为一等节点：GameObject -挂载→ 实例 -实例化→ 脚本类；
+            // 实例序列化字段引用从实例出发，对象级与组件级关系自然分开。
+            var clsNode = nodeBySourceKey[typeKey];
+            var goDoc = goId ? docByFileId[goId] : null;
+            var instKey = 'comp:' + f.path + '#' + d.fileId;
+            var inst = pushNode(makeNode(instKey, 'component', clsNode ? clsNode.name : '', {
+              filePath: f.path, guid: sg,
+              members: clsNode ? clsNode.members.slice() : [],
+              classKey: typeKey,
+              mountedOn: goDoc ? (findScalar(goDoc.body, 'm_Name') || ('GameObject ' + goId)) : ''
+            }));
+            if (inst) {
+              pushEdge(goKey, instKey, 'attach', '', '挂载 ' + inst.name);
+              pushEdge(instKey, typeKey, 'instantiate', '', '实例化');
+              ownerKey = instKey; // 序列化引用由「实例」持有，而不是GameObject
+            }
+          }
+          if (ownerKey === key) ownerKey = goKey; // 未解析脚本（官方包/失效引用）：退回 GameObject 持有
         }
         // 组件清单：任何带 m_GameObject 的文档（Transform / Rigidbody / 自定义脚本…）
         var compGo = gameObjectId(d.body);
@@ -502,6 +524,7 @@
             type: cname, classId: d.classId, fileId: d.fileId,
             nodeKey: cKey, isScript: cIsScript, enabled: findScalar(d.body, 'm_Enabled') !== '0'
           });
+          compNameByFileId[d.fileId] = cname; // fileID → 组件名：对象引用边要标出「被引用的具体组件」
           // 脚本组件没解析出名字（官方包脚本缺 PackageCache / 已删除脚本的失效引用）
           if (cIsScript && cname === 'MonoBehaviour') unresolvedScriptComps++;
         }
@@ -524,7 +547,9 @@
               continue;
             }
             if (ownerKey === targetKey) continue;
-            pushEdge(ownerKey, targetKey, 'serialize', fr[1], fr[1]);
+            // 引用方组件名：标出「哪个脚本的哪个字段引用了它」
+            pushEdge(ownerKey, targetKey, 'serialize', fr[1], fr[1], '',
+              compNameByFileId[d.fileId] || CLASS_NAMES[d.classId] || '');
           }
         }
         // 同一文件内的对象引用（`fieldName: {fileID: 123}`）：指向别的 GameObject
@@ -538,10 +563,24 @@
             if (fid === '0' || fid === d.fileId || fid === compGo) continue;
             var targetDoc = docByFileId[fid];
             if (!targetDoc) continue;
+            // 目标是已解析的脚本组件 → 直接连「目标组件实例」，组件级关系彻底分开
+            if (targetDoc.classId === '114' || targetDoc.classId === '115') {
+              var tTk = csGuidToType[scriptGuid(targetDoc.body)] || '';
+              var tInstNode = tTk ? nodeBySourceKey['comp:' + f.path + '#' + fid] : null;
+              if (tInstNode) {
+                pushEdge(ownerKey, tInstNode.sourceKey, 'serialize', rr[1], rr[1], tInstNode.name,
+                  compNameByFileId[d.fileId] || CLASS_NAMES[d.classId] || '');
+                continue;
+              }
+            }
             var targetGoId = targetDoc.classId === '1' ? targetDoc.fileId : gameObjectId(targetDoc.body);
             if (!targetGoId || targetGoId === compGo) continue;
             var targetGoKey = targetDoc.aliasKey || ('asset:' + f.path + '#' + targetGoId);
-            pushEdge(ownerKey, targetGoKey, 'serialize', rr[1], rr[1]);
+            // fileID 直接指向组件（Transform / 脚本…）时，把组件名带上，环视图与追踪才能标出具体组件
+            var tComp = targetDoc.classId === '1' ? '' :
+              (compNameByFileId[fid] || CLASS_NAMES[targetDoc.classId] || '');
+            pushEdge(ownerKey, targetGoKey, 'serialize', rr[1], rr[1], tComp,
+              compNameByFileId[d.fileId] || CLASS_NAMES[d.classId] || '');
           }
         }
       });
@@ -550,6 +589,20 @@
       Object.keys(compsByGo).forEach(function (goId) {
         var n = nodeByKey['asset:' + f.path + '#' + goId];
         if (n) n.components = compsByGo[goId];
+      });
+    });
+
+    // 同一脚本挂载在多个对象上时，实例名追加宿主对象名避免重名（PlayerMover @Player）
+    var instByClass = Object.create(null);
+    nodes.forEach(function (n) {
+      if (n.kind !== 'component') return;
+      (instByClass[n.classKey] = instByClass[n.classKey] || []).push(n);
+    });
+    Object.keys(instByClass).forEach(function (ck) {
+      var list = instByClass[ck];
+      if (list.length < 2) return;
+      list.forEach(function (n) {
+        n.name = n.fullName + ' @' + (n.mountedOn || '未命名');
       });
     });
 

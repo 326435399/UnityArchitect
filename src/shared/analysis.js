@@ -130,6 +130,9 @@
   function collectRefs(project) {
     var list = [];
     project.nodes.forEach(function (n) {
+      // 组件实例的成员是从类节点复制来的展示副本，代码级引用统计只看类节点，
+      // 否则同一个成员的引用会被实例与类各算一遍
+      if (n.kind === 'component') return;
       (n.members || []).forEach(function (m) {
         (m.memberRefs || []).forEach(function (u) {
           list.push({ owner: n, member: m, ref: u });
@@ -169,6 +172,7 @@
     project.nodes.forEach(function (n) {
       // Same event name in another class must not leak into this trace.
       if (typeKey && n.sourceKey !== typeKey) return;
+      if (n.kind === 'component') return; // 组件实例是展示副本，定义只认类节点
       (n.members || []).forEach(function (m) {
         if (m.kind === 'event' && m.name === name && !res.definitions.some(function (d) { return d.id === n.id; })) {
           res.definitions.push({ id: n.id, name: n.name, methods: [], details: [] });
@@ -376,6 +380,7 @@
 
     // All classes declaring a member with this name (field or property).
     project.nodes.forEach(function (n) {
+      if (n.kind === 'component') return; // 组件实例是展示副本，定义只认类节点
       var isDef = false, defMember = null;
       (n.members || []).forEach(function (m) {
         if ((m.kind === 'field' || m.kind === 'property') && m.name === name &&
@@ -506,6 +511,7 @@
     var res = { method: name, definitions: [], callers: [], readers: [], details: [] };
     if (!name) return res;
     project.nodes.forEach(function (n) {
+      if (n.kind === 'component') return; // 组件实例是展示副本，定义只认类节点
       (n.members || []).forEach(function (m) {
         if (m.kind === 'method' && m.name === name && (!typeKey || n.sourceKey === typeKey) &&
           !res.definitions.some(function (d) { return d.id === n.id; })) {
@@ -579,6 +585,127 @@
     };
   }
 
+  /**
+   * 项目体检：不改变画布，只把图分析结果整理成一份可执行的问题清单。
+   * 每个问题都带 nodeIds / edgeIds，点击即可定位；循环问题另带 cycleId 用于环形子图视图。
+   */
+  function healthReport(project) {
+    var idx = buildIndex(project);
+    var byId = Object.create(null);
+    project.nodes.forEach(function (n) { byId[n.id] = n; });
+    var scripts = project.nodes.filter(function (n) { return SCRIPT_KINDS[n.kind]; });
+    var scriptTotal = Math.max(1, scripts.length);
+
+    // ---- 1. 循环依赖：环上每个类都让改动传导，是最该先拆的 ----
+    var cycles = findCycles(project, idx.edges).sort(function (a, b) { return b.length - a.length; });
+    var cycleAll = cycles.map(function (c, i) {
+      var names = c.nodeIds.map(function (x) { return byId[x] ? byId[x].name : x; });
+      return {
+        label: '环 ' + (i + 1) + ' · ' + c.length + ' 个类',
+        sub: names.slice(0, 6).join(' → ') + (names.length > 6 ? ' → …' : '') + ' → ' + names[0],
+        nodeIds: c.nodeIds, edgeIds: c.edges, cycleId: c.id, open: 'cycle'
+      };
+    });
+
+    // ---- 2. 耦合中心：谁都在引用它，动一下全项目抖三抖 ----
+    var hubMin = Math.max(4, Math.ceil(scriptTotal * 0.15));
+    var hubAll = scripts.map(function (n) {
+      var d = degrees(project, n.id, idx);
+      return { n: n, d: d };
+    }).filter(function (x) { return x.d.in >= hubMin; })
+      .sort(function (a, b) { return b.d.in - a.d.in; })
+      .map(function (x) {
+        return {
+          label: x.n.name,
+          sub: '被 ' + x.d.in + ' 处引用 · 自身依赖 ' + x.d.out + ' 个',
+          nodeIds: [x.n.id], open: 'node'
+        };
+      });
+
+    // ---- 3. 上帝类：字段方法堆在一起，职责不清 ----
+    var godAll = scripts.map(function (n) {
+      var c = { field: 0, method: 0, event: 0, property: 0 };
+      (n.members || []).forEach(function (m) { if (c[m.kind] !== undefined) c[m.kind] += 1; });
+      var total = c.field + c.method + c.event + c.property;
+      return { n: n, c: c, total: total };
+    }).filter(function (x) { return x.total >= 20; })
+      .sort(function (a, b) { return b.total - a.total; })
+      .map(function (x) {
+        return {
+          label: x.n.name,
+          sub: x.total + ' 个成员（变量 ' + x.c.field + ' / 方法 ' + x.c.method +
+            ' / 属性 ' + x.c.property + ' / 事件 ' + x.c.event + '）',
+          nodeIds: [x.n.id], open: 'node'
+        };
+      });
+
+    // ---- 4. 孤立脚本：没有任何引用关系 ----
+    var isoAll = isolatedNodes(project, idx).map(function (x) {
+      var n = byId[x];
+      return { label: n ? n.name : x, sub: n && n.namespace ? n.namespace : '无命名空间', nodeIds: [x], open: 'node' };
+    });
+
+    // ---- 5. 空壳类型：除了声明什么都没有 ----
+    var emptyAll = scripts.filter(function (n) {
+      return (n.kind === 'class' || n.kind === 'struct') && !(n.members || []).length;
+    }).map(function (n) {
+      return { label: n.name, sub: '声明了但没有任何成员', nodeIds: [n.id], open: 'node' };
+    });
+
+    // ---- 6. 缺命名空间：Unity 工程里最容易演变成全局面条 ----
+    var noNsAll = scripts.filter(function (n) { return !n.namespace; }).map(function (n) {
+      return { label: n.name, sub: '未归入任何命名空间', nodeIds: [n.id], open: 'node' };
+    });
+
+    // ---- 7. 失效节点：源文件已被删除或改名 ----
+    var staleAll = project.nodes.filter(function (n) { return n.stale; }).map(function (n) {
+      return { label: n.name, sub: '源文件已不存在', nodeIds: [n.id], open: 'node' };
+    });
+
+    var nsRatio = noNsAll.length / scriptTotal;
+    var nsPenalty = nsRatio > 0.5 ? 10 : (nsRatio > 0.25 ? 6 : (noNsAll.length ? 3 : 0));
+
+    var groups = [
+      { key: 'cycle', label: '循环依赖', severity: 'high', cap: 25, unit: 5,
+        hint: '两个以上的类互相引用，改动会在环里来回传导，也无法单独测试或拆包。',
+        items: cycleAll, count: cycleAll.length },
+      { key: 'hub', label: '耦合中心', severity: 'warn', cap: 12, unit: 3,
+        hint: '被大量类引用的节点：它一变，所有引用方都要跟着改。确认它是否职责过宽。',
+        items: hubAll.slice(0, 8), count: hubAll.length },
+      { key: 'god', label: '上帝类', severity: 'warn', cap: 10, unit: 2,
+        hint: '成员过多的类往往混了多个职责，是拆分的第一候选。',
+        items: godAll.slice(0, 8), count: godAll.length },
+      { key: 'isolated', label: '孤立脚本', severity: 'warn', cap: 8, unit: 1,
+        hint: '既不引用别人也没人引用它。可能是废弃代码，也可能是靠反射/Resources.Load 调用的，需人工确认。',
+        items: isoAll.slice(0, 20), count: isoAll.length },
+      { key: 'empty', label: '空壳类型', severity: 'info', cap: 5, unit: 1,
+        hint: '只有声明没有成员，通常是占位或删代码留下的壳子。',
+        items: emptyAll.slice(0, 12), count: emptyAll.length },
+      { key: 'ns', label: '缺命名空间', severity: 'info', cap: 10, unit: 0,
+        hint: '没有命名空间的类会进入全局作用域，容易和其他插件重名。',
+        items: noNsAll.slice(0, 12), count: noNsAll.length, penalty: nsPenalty },
+      { key: 'stale', label: '失效节点', severity: 'info', cap: 4, unit: 0.5,
+        hint: '上次扫描后源文件消失，图里还留着旧节点。可在工程信息里一键清理。',
+        items: staleAll.slice(0, 12), count: staleAll.length }
+    ];
+
+    var penalty = 0, total = 0;
+    groups.forEach(function (g) {
+      total += g.count;
+      var p = g.penalty !== undefined ? g.penalty : Math.min(g.count * g.unit, g.cap);
+      g.penalty = p;
+      penalty += p;
+    });
+    var score = Math.max(0, Math.round(100 - penalty));
+    return {
+      score: score,
+      grade: score >= 85 ? '清爽' : (score >= 70 ? '尚可' : (score >= 50 ? '需关注' : '亟需治理')),
+      total: total,
+      groups: groups,
+      metrics: { scripts: scripts.length, edges: idx.edges.length, cycles: cycles.length }
+    };
+  }
+
   /** Global search across nodes, members and edges. Returns plain display records. */
   function search(project, query, options) {
     var q = String(query || '').trim().toLowerCase();
@@ -620,10 +747,107 @@
     return results.slice(0, limit);
   }
 
+  /** 数据溯源：从某节点出发回答「数据从哪里来、到哪里去」。
+   *  根 = 资产节点（SO / 场景 / 预制体，磁盘上唯一一份的数据）或没有出边的代码叶子。
+   *  下游沿「它引用谁」走到根；上游沿「被谁引用」走到没有再被引用的顶层消费者。 */
+  function rootTrace(project, nodeId) {
+    var byId = Object.create(null);
+    project.nodes.forEach(function (n) { byId[n.id] = n; });
+    var empty = { origin: null, roots: [], consumers: [], cycles: 0, counts: { roots: 0, assetRoots: 0, leafRoots: 0, consumers: 0 } };
+    if (!byId[nodeId]) return empty;
+    var ix = buildIndex(project);
+
+    function isAsset(n) { return n.kind === 'soAsset' || n.kind === 'scene' || n.kind === 'prefab'; }
+
+    // 下游找根：沿出边递归；资产节点即停，出度 0 的节点也是根。
+    // SO 脚本类本身不是根——引用它的类实际引用的是 .asset 实例，根重定向到资产。
+    function assetInstancesOf(id) {
+      var out = [];
+      ix.inn[id].forEach(function (e) {
+        var f = byId[e.from];
+        if (f && f.kind === 'soAsset' && out.indexOf(f) < 0) out.push(f);
+      });
+      return out;
+    }
+
+    var downDist = Object.create(null);
+    var cycles = 0;
+    (function dfs(id, dist, stack) {
+      var n = byId[id];
+      var isLeaf = !ix.out[id].length;
+      if (id !== nodeId && (isAsset(n) || isLeaf)) {
+        if (n.kind === 'scriptableObject') {
+          var inst = assetInstancesOf(id);
+          if (inst.length) {
+            inst.forEach(function (a) {
+              if (downDist[a.id] === undefined || dist + 1 < downDist[a.id]) downDist[a.id] = dist + 1;
+            });
+            return;
+          }
+        }
+        if (downDist[id] === undefined || dist < downDist[id]) downDist[id] = dist;
+        return;
+      }
+      if (stack.indexOf(id) >= 0) { cycles++; return; }
+      if (downDist[id] !== undefined && downDist[id] <= dist) return;
+      downDist[id] = dist;
+      var nextStack = stack.concat([id]);
+      ix.out[id].forEach(function (e) { dfs(e.to, dist + 1, nextStack); });
+    })(nodeId, 0, []);
+    delete downDist[nodeId];
+
+    // 上游找消费者：沿入边递归；没有再被引用的节点就是顶层消费者。
+    var upDist = Object.create(null);
+    (function dfs(id, dist, stack) {
+      var n = byId[id];
+      if (id !== nodeId && !ix.inn[id].length) {
+        if (upDist[id] === undefined || dist < upDist[id]) upDist[id] = dist;
+        return;
+      }
+      if (stack.indexOf(id) >= 0) return;
+      if (upDist[id] !== undefined && upDist[id] <= dist) return;
+      upDist[id] = dist;
+      var nextStack = stack.concat([id]);
+      ix.inn[id].forEach(function (e) { dfs(e.from, dist + 1, nextStack); });
+    })(nodeId, 0, []);
+    delete upDist[nodeId];
+
+    function collect(map, rootOnly) {
+      var out = [];
+      Object.keys(map).forEach(function (id) {
+        var n = byId[id];
+        if (!n) return;
+        if (rootOnly && !isAsset(n) && ix.out[id].length) return;
+        out.push({ id: id, name: n.name, kind: n.kind, dist: map[id], asset: isAsset(n) });
+      });
+      out.sort(function (a, b) { return a.dist - b.dist || a.name.localeCompare(b.name); });
+      return out;
+    }
+
+    var roots = collect(downDist, true);
+    // 消费者只取「顶层」——没有再被任何节点引用的终点（如场景、顶层类）。
+    var consumers = Object.keys(upDist).filter(function (id) {
+      var n = byId[id];
+      return n && !ix.inn[id].length;
+    }).map(function (id) {
+      var n = byId[id];
+      return { id: id, name: n.name, kind: n.kind, dist: upDist[id], asset: isAsset(n) };
+    }).sort(function (a, b) { return a.dist - b.dist || a.name.localeCompare(b.name); });
+    var assetRoots = roots.filter(function (r) { return r.asset; }).length;
+    return {
+      origin: byId[nodeId],
+      originIsRoot: isAsset(byId[nodeId]) || !ix.out[nodeId].length,
+      originRootKind: isAsset(byId[nodeId]) ? '资产' : (!ix.out[nodeId].length ? '叶' : ''),
+      roots: roots, consumers: consumers, cycles: cycles,
+      counts: { roots: roots.length, assetRoots: assetRoots, leafRoots: roots.length - assetRoots, consumers: consumers.length }
+    };
+  }
+
   return {
     buildIndex: buildIndex, degrees: degrees, neighbors: neighbors,
     findCycles: findCycles, isolatedNodes: isolatedNodes,
     traceEvent: traceEvent, traceField: traceField, traceMethod: traceMethod, refCount: refCount,
-    summary: summary, search: search
+    rootTrace: rootTrace,
+    summary: summary, search: search, healthReport: healthReport
   };
 });

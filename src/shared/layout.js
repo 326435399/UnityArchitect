@@ -184,7 +184,7 @@
    */
   function focusLayout(project, focusId, options) {
     var opts = options || {};
-    var depth = Math.max(1, Math.min(4, opts.depth || 1));
+    var depth = opts.full ? 64 : Math.max(1, Math.min(4, opts.depth || 1));
     var side = opts.side === 'in' || opts.side === 'out' ? opts.side : 'both';
     var byId = Object.create(null);
     project.nodes.forEach(function (n) { byId[n.id] = n; });
@@ -220,11 +220,18 @@
     var down = side === 'in' ? Object.create(null) : bfs(outgoing);
     // Reached in both directions -> downstream column (it's what I depend on).
     Object.keys(up).forEach(function (id) { if (down[id] !== undefined) delete up[id]; });
+    // 溯源模式：左边是数据根（出边方向），右边是消费者（入边方向）——与聚焦相反。
+    if (opts.flip) { var swap = up; up = down; down = swap; }
+
+    var maxUp = 0, maxDown = 0;
+    Object.keys(up).forEach(function (id) { if (up[id] > maxUp) maxUp = up[id]; });
+    Object.keys(down).forEach(function (id) { if (down[id] > maxDown) maxDown = down[id]; });
+    if (!opts.full) { maxUp = Math.min(maxUp, depth); maxDown = Math.min(maxDown, depth); }
 
     var columns = [];
-    for (var d1 = depth; d1 >= 1; d1--) columns.push({ dist: d1, dir: 'up', items: [] });
+    for (var d1 = maxUp; d1 >= 1; d1--) columns.push({ dist: d1, dir: 'up', items: [] });
     columns.push({ dist: 0, dir: 'focus', items: [byId[focusId]] });
-    for (var d2 = 1; d2 <= depth; d2++) columns.push({ dist: d2, dir: 'down', items: [] });
+    for (var d2 = 1; d2 <= maxDown; d2++) columns.push({ dist: d2, dir: 'down', items: [] });
 
     columns.forEach(function (col) {
       if (col.dir === 'focus') return;
@@ -345,6 +352,29 @@
       { label: '定义', items: pick(res.definitions) },
       { label: '调用', items: pick(res.callers) }
     ]);
+  }
+
+  /**
+   * Cycle view: put the members of ONE dependency loop on a circle, in the order
+   * they are referenced, so the loop reads as an actual loop instead of arrows
+   * scattered across the canvas. Radius grows with node count and node width.
+   */
+  function cycleLayout(project, ids) {
+    var nodes = (ids || []).map(function (id) { return Model.getNode(project, id); }).filter(Boolean);
+    if (!nodes.length) return { ids: [], positions: {}, columnBounds: null };
+    var maxW = 0;
+    nodes.forEach(function (n) {
+      var g = measureNode(n, { expanded: true });
+      if (g.w > maxW) maxW = g.w;
+    });
+    var n = nodes.length;
+    var radius = Math.max(190, (maxW + 90) * n / (2 * Math.PI));
+    var positions = Object.create(null);
+    nodes.forEach(function (node, i) {
+      var a = -Math.PI / 2 + i * 2 * Math.PI / n;
+      positions[node.id] = { x: Math.round(Math.cos(a) * radius), y: Math.round(Math.sin(a) * radius) };
+    });
+    return { ids: nodes.map(function (x) { return x.id; }), positions: positions, columnBounds: null, radius: radius };
   }
 
   /**
@@ -574,7 +604,7 @@
     memberLine: memberLine, measureNode: measureNode,
     layeredLayout: layeredLayout, gridLayout: gridLayout,
     focusLayout: focusLayout, eventTraceLayout: eventTraceLayout, fieldTraceLayout: fieldTraceLayout,
-    methodTraceLayout: methodTraceLayout, assemblyLayout: assemblyLayout,
+    methodTraceLayout: methodTraceLayout, assemblyLayout: assemblyLayout, cycleLayout: cycleLayout,
     applyPositions: applyPositions, fitBounds: fitBounds
   };
 });

@@ -1,0 +1,26 @@
+{
+  "ok": true,
+  "setup": {
+    "ok": true,
+    "target": "CycleA",
+    "mode": "root"
+  },
+  "hoverEdge": {
+    "ok": true,
+    "edge": "CycleA.goB -> CycleGoB.Transform",
+    "litEdges": 1,
+    "litRows": [
+      "node_mwey9dei_b_xohbk|member:goB",
+      "node_mwey9dei_a_qo5t0|comp:Transform"
+    ]
+  },
+  "hoverComp": {
+    "ok": true,
+    "hovered": "CycleGoB.Transform",
+    "litEdges": 1,
+    "litRows": [
+      "node_mwey9dei_b_xohbk|member:goB",
+      "node_mwey9dei_a_qo5t0|comp:Transform"
+    ]
+  }
+}

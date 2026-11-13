@@ -94,12 +94,51 @@ try {
   ok(kinds.aggregate > 0, 'container aggregate edge', kinds);
   ok(parsed.stats.unknownGuids === 0, 'all GUIDs resolved', parsed.stats.unknownGuids);
   var attach = parsed.edges.find(function (e) { return e.kind === 'attach'; });
-  ok(attach && attach.toKey.indexOf('PlayerController') >= 0, 'attach points at the main script class', attach && attach.toKey);
+  ok(attach && attach.toKey.indexOf('#') > 0 && attach.toKey.indexOf('comp:') === 0,
+    'attach points at the component instance', attach && attach.toKey);
+  var instNode = parsed.nodes.find(function (n) { return n.sourceKey === attach.toKey; });
+  ok(instNode && instNode.kind === 'component' && instNode.classKey === 'cs:Assets/Scripts/Player/PlayerController.cs#Battle.Player.PlayerController' &&
+    (instNode.members || []).some(function (m) { return m.name === 'config'; }),
+    'component instance node carries class members', instNode && instNode.classKey);
+  ok(instNode && instNode.mountedOn === 'PlayerRoot', 'instance records the mounting GameObject', instNode && instNode.mountedOn);
+  ok(parsed.edges.some(function (e) { return e.kind === 'instantiate' && e.fromKey === attach.toKey &&
+    e.toKey === 'cs:Assets/Scripts/Player/PlayerController.cs#Battle.Player.PlayerController'; }), 'instantiate edge links instance to class');
   var serEdge = parsed.edges.find(function (e) {
-    return e.kind === 'serialize' && e.fromKey === 'asset:Assets/Prefabs/Player.prefab#100000' &&
+    return e.kind === 'serialize' && e.fromKey === attach.toKey &&
       e.toKey === soNode.sourceKey;
   });
   ok(serEdge && serEdge.sourceMember === 'config', 'serialize edge keeps the field name', serEdge);
+  var objRefEdge = parsed.edges.find(function (e) {
+    return e.kind === 'serialize' && e.sourceMember === 'spawnTarget';
+  });
+  ok(objRefEdge && objRefEdge.targetMember === 'Transform',
+    'same-file object reference records the targeted component', objRefEdge && objRefEdge.targetMember);
+  ok(objRefEdge && objRefEdge.sourceComp === 'GameManager',
+    'object reference records the source script component', objRefEdge && objRefEdge.sourceComp);
+  var normEdge = S.normalizeEdge(objRefEdge, 'e1');
+  ok(normEdge.targetMember === 'Transform' && normEdge.sourceComp === 'GameManager',
+    'normalizeEdge keeps targetMember and sourceComp');
+  var dupEdges = parsed.edges.filter(function (e) {
+    return e.kind === 'serialize' && e.sourceMember === 'spawnTarget';
+  });
+  ok(dupEdges.length === 1, 'sourceKey keeps distinct source components separate');
+  // 组件实例间引用：HudView 实例（跨 GO）→ GameManager 实例
+  var instRef = parsed.edges.find(function (e) {
+    return e.kind === 'serialize' && e.fromKey === 'comp:Assets/Scenes/Main.unity#600101' &&
+      e.toKey === 'comp:Assets/Scenes/Main.unity#600000';
+  });
+  ok(instRef && instRef.label === 'crossTarget' && instRef.targetMember === 'GameManager',
+    'component instance references another instance directly', instRef && instRef.label + '/' + instRef.targetMember);
+  ok(parsed.edges.some(function (e) {
+    return e.kind === 'serialize' && e.fromKey === 'comp:Assets/Scenes/Main.unity#600100' &&
+      e.toKey === 'comp:Assets/Scenes/Main.unity#600000';
+  }), 'same-GO sibling component reference also links instance to instance');
+  // 同一脚本挂载多处：实例名追加宿主对象名
+  var pcInsts = parsed.nodes.filter(function (n) { return n.kind === 'component' && n.classKey.indexOf('PlayerController') >= 0; });
+  ok(pcInsts.length === 2 && pcInsts.every(function (n) { return / @/.test(n.name); }),
+    'duplicated script instances get host-suffixed names', pcInsts.map(function (n) { return n.name; }).join(', '));
+  ok(!parsed.edges.some(function (e) { return /EditorClassIdentifier/.test(e.label || ''); }),
+    'empty m_Name no longer leaks the next YAML line into labels');
   eq(Unity.normalizePath('C:/Proj/Assets/Scripts/A.cs', 'C:/Proj'), 'Assets/Scripts/A.cs', 'root prefix normalized');
 
   // ---------------------------------------------------------------- merge
@@ -291,6 +330,61 @@ try {
     'traceMethod finds the same-class call (ApplyDamage -> TakeDamage)');
   ok(Analysis.refCount(project, g1State.sourceKey, 'Changed') >= 3, 'refCount counts definition-adjacent uses');
 
+  // 数据溯源：根 = 资产节点或无出边的代码叶子；上游消费者走到顶层；环要单独报。
+  section('root trace (data provenance)');
+  var rootRes = Analysis.rootTrace(project, pcNodeEarly.id);
+  ok(rootRes.counts.roots >= 1, 'rootTrace finds at least one data root', rootRes.counts);
+  ok(rootRes.roots.some(function (r) { return r.name === 'HealthData' && !r.asset; }),
+    'HealthData is reported as a code leaf root', rootRes.roots);
+  ok(rootRes.roots.every(function (r) {
+    if (r.asset) return true;
+    return !project.edges.some(function (e) { return e.from === r.id; });
+  }), 'every non-asset root really has no outgoing reference');
+  ok(rootRes.consumers.every(function (c) { return typeof c.dist === 'number'; }),
+    'consumers carry hop distance');
+  var cycRaw = Unity.parseProject([{
+    path: 'Cycle.cs',
+    content: 'namespace Cyc { public class CA { public CB b; } public class CB { public CA a; } }'
+  }], { rootPrefix: '' });
+  var cycProject = S.createEmptyProject('Cyc');
+  Model.mergeScan(cycProject, cycRaw);
+  var caNode = cycProject.nodes.find(function (n) { return n.name === 'CA'; });
+  var cycRes = Analysis.rootTrace(cycProject, caNode.id);
+  ok(cycRes.cycles >= 1, 'rootTrace reports a cycle instead of a fake root', cycRes.cycles);
+  ok(!cycRes.roots.length, 'a pure cycle produces no roots');
+
+  section('health report (project checkup)');
+  var cycRep = Analysis.healthReport(cycProject);
+  var cycGroup = cycRep.groups.find(function (g) { return g.key === 'cycle'; });
+  ok(cycGroup && cycGroup.count === 1, 'health report flags the CA<->CB cycle', cycGroup && cycGroup.count);
+  ok(cycGroup.items[0].nodeIds.length === 2 && cycGroup.items[0].edgeIds.length >= 2,
+    'cycle issue carries nodeIds and edgeIds for the cycle view');
+  ok(cycRep.score < 100 && cycRep.total >= 1, 'health score drops below 100 when issues exist', cycRep);
+  var cleanRep = Analysis.healthReport(project);
+  ok(typeof cleanRep.score === 'number' && cleanRep.score >= 0 && cleanRep.grade,
+    'clean project still yields a score and grade', cleanRep.score);
+  ok(cleanRep.groups.every(function (g) { return Array.isArray(g.items); }),
+    'every health group exposes a clickable item list');
+  // 上帝类：成员 >= 20 会被点名
+  var godRaw = Unity.parseProject([{
+    path: 'God.cs',
+    content: 'namespace GodNs { public class God { ' +
+      Array.from({ length: 12 }, function (_, i) { return 'public int f' + i + ';'; }).join(' ') +
+      Array.from({ length: 10 }, function (_, i) { return 'public void M' + i + '() {}'; }).join(' ') + ' } }'
+  }], { rootPrefix: '' });
+  var godProject = S.createEmptyProject('God');
+  Model.mergeScan(godProject, godRaw);
+  var godGroup = Analysis.healthReport(godProject).groups.find(function (g) { return g.key === 'god'; });
+  ok(godGroup && godGroup.count === 1 && godGroup.items[0].label === 'God',
+    'a 22-member class is flagged as a god class', godGroup && godGroup.items[0]);
+
+  section('cycle layout (ring view)');
+  var cycLay = Layout.cycleLayout(cycProject, cycGroup.items[0].nodeIds);
+  ok(cycLay.ids.length === 2 && cycLay.positions[cycLay.ids[0]],
+    'cycleLayout returns positions for every loop member');
+  var d0 = Math.hypot(cycLay.positions[cycLay.ids[0]].x, cycLay.positions[cycLay.ids[0]].y);
+  ok(d0 >= 180, 'ring radius keeps nodes apart', d0);
+
   // 回归：接收者类型解析不到时（set.Contains / SimpleTypes.Contains 这类对
   // .NET 内置类型的调用），引用不得归到任何声明了同名成员的工程类头上，
   // 否则「谁都会调用」的工具方法会污染整个引用追踪视图。
@@ -462,8 +556,8 @@ try {
   var flowRes = Analysis.traceField(project, 'config', pcNode.sourceKey);
   ok(flowRes.sources.some(function (s) { return s.name === 'DefaultHealth' && /SO 资源/.test(s.detail || ''); }),
     'SO asset instance surfaces as a resource source', flowRes.sources);
-  ok(flowRes.sources.some(function (s) { return s.name === 'PlayerRoot' && /序列化引用/.test(s.detail || ''); }),
-    'mounting GameObject surfaces as the serialization owner', flowRes.sources);
+  ok(flowRes.sources.some(function (s) { return /^PlayerController/.test(s.name) && /序列化引用/.test(s.detail || ''); }),
+    'mounting component instance surfaces as the serialization owner', flowRes.sources);
 
   // ---------------------------------------------------------------- scan diff
   section('scan diff');

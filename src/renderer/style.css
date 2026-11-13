@@ -167,3 +167,21 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); }
 .drop-card b { font-size: 17px; color: var(--text); }
 .drop-card span { font-size: 12px; line-height: 1.7; color: var(--text3); }
 .scope-select { height: 25px; padding: 0 6px; border: 1px solid var(--border); border-radius: 5px; background: var(--panel); color: var(--text); font-size: 12px; }
+
+/* 项目体检（H）：分数环 + 分组问题清单 */
+.health-head { display: flex; align-items: center; gap: 14px; margin-bottom: 12px; }
+.health-score { --p: 0; --c: var(--accent); width: 86px; height: 86px; border-radius: 50%; flex: none; position: relative;
+  background: conic-gradient(var(--c) calc(var(--p) * 1%), var(--panel-alt) 0);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; }
+.health-score::before { content: ''; position: absolute; inset: 7px; border-radius: 50%; background: var(--panel); }
+.health-score b, .health-score span { position: relative; }
+.health-score b { font-size: 22px; font-weight: 600; line-height: 1; color: var(--text); }
+.health-score span { font-size: 11px; color: var(--text2); margin-top: 3px; }
+.health-brief { font-size: 12px; line-height: 1.7; color: var(--text2); }
+.health-brief b { color: var(--text); }
+.health-group { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 10px; overflow: hidden; }
+.health-group > h3 { margin: 0; padding: 8px 12px; font-size: 12px; font-weight: 600; display: flex; align-items: center; gap: 8px; background: var(--panel-alt); color: var(--text); }
+.health-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; display: inline-block; }
+.health-item { cursor: pointer; }
+.health-item .tag { max-width: 62%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.health-hint { padding: 6px 12px; font-size: 11px; line-height: 1.6; color: var(--text3); border-top: 1px dashed var(--border); }

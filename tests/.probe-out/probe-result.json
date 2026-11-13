@@ -1,0 +1,72 @@
+{
+  "ok": true,
+  "health": {
+    "score": "82",
+    "groups": [
+      "循环依赖 · 2",
+      "耦合中心 · 1",
+      "上帝类 · 2",
+      "孤立脚本 · 1"
+    ],
+    "itemCount": 6
+  },
+  "cycleView": {
+    "canvasMode": "cycle",
+    "links": 3,
+    "labels": [
+      "goB · Transform",
+      "挂载 CycleB",
+      "goA · CycleA"
+    ],
+    "roleRows": [
+      "CycleA:序列化·goB",
+      "CycleB:序列化·goA",
+      "CycleGoB:序列化·Transform"
+    ],
+    "visible": 3
+  },
+  "rootTrace": {
+    "ok": true,
+    "target": "CycleA",
+    "withMember": [
+      {
+        "node": "node_mwexn56o_7_g2rl9",
+        "role": "组合",
+        "member": "b"
+      },
+      {
+        "node": "node_mwexn56o_8_1dj3r",
+        "role": "组合",
+        "member": "a"
+      },
+      {
+        "node": "node_mwexn56o_b_166nx",
+        "role": "序列化",
+        "member": "goB"
+      },
+      {
+        "node": "node_mwexn56o_a_vvfna",
+        "role": "序列化",
+        "member": "Transform"
+      },
+      {
+        "node": "node_mwexn56o_c_e5bql",
+        "role": "序列化",
+        "member": "goA"
+      }
+    ],
+    "mode": "root",
+    "visible": 6
+  },
+  "instances": {
+    "ok": true,
+    "instances": 2,
+    "names": [
+      "CycleA",
+      "CycleB"
+    ],
+    "attach": 2,
+    "instantiate": 2,
+    "instToInst": 1
+  }
+}

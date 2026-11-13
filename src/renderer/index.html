@@ -28,6 +28,7 @@
     <button class="tbtn primary" data-action="scan">扫描 Unity 工程</button>
     <button class="tbtn" data-action="rescan" title="重新读取上次绑定的工程目录，无需再选目录">重新扫描</button>
     <span class="sep"></span>
+    <button class="tbtn" data-action="health" title="项目体检（H）：循环依赖 / 耦合中心 / 上帝类 / 孤立脚本 / 空壳类型 / 缺命名空间，逐条可点击定位">体检</button>
     <button class="tbtn" data-action="layout-layered">分层布局</button>
     <button class="tbtn" data-action="fit">适应画布</button>
     <span class="sep"></span>
@@ -38,6 +39,7 @@
     <button class="tbtn" data-action="focus" title="选中节点后点击：只保留它和引用关系，左上游、右下游重新排布；再点一次退出">聚焦依赖</button>
     <button class="tbtn" data-action="trace-event" title="选中含事件的节点后点击：追踪该事件的定义 / 注册 / 激活，三列聚拢展示触发链；再点一次退出">事件追踪</button>
     <button class="tbtn" data-action="trace-field" title="选中节点后点击：追踪变量/属性的所有引用（声明 / 写入 / 读取）；再点一次退出">数据流向</button>
+    <button class="tbtn" data-action="trace-root" title="选中节点后点击：左列数据根（SO 资产 / 代码叶子），右列最终消费者；再点一次退出">溯源根</button>
     <button class="tbtn" data-action="highlight-member" data-id="event" title="把所有 C# 事件成员的文字换成醒目颜色；再点一次恢复默认">事件</button>
     <button class="tbtn" data-action="highlight-member" data-id="coroutine" title="把所有协程成员的文字换成醒目颜色；再点一次恢复默认">协程</button>
     <button class="tbtn" data-action="highlight-member" data-id="unityEvent" title="把所有 UnityEvent 成员的文字换成醒目颜色；再点一次恢复默认">UnityEvent</button>

@@ -7,7 +7,7 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
 
-  var APP_VERSION = '2.9.0';
+  var APP_VERSION = '2.12.1';
 
   /* ==================================================================
    * 关于页信息（帮助 → 关于）
@@ -30,6 +30,7 @@
     enum:             { label: '枚举',          color: '#854F0B', dark: '#EF9F27', badge: 'E' },
     scriptableObject: { label: 'ScriptableObject', color: '#BA7517', dark: '#FAC775', badge: 'SO' },
     gameObject:       { label: 'GameObject',    color: '#1D9E75', dark: '#9FE1CB', badge: 'GO' },
+    component:        { label: '脚本组件',      color: '#7048B6', dark: '#B8A7E8', badge: 'Co' },
     prefab:           { label: '预制体',        color: '#0F6E56', dark: '#5DCAA5', badge: 'P' },
     scene:            { label: '场景',          color: '#378ADD', dark: '#B5D4F4', badge: 'Sc' }
   };
@@ -42,7 +43,8 @@
     depend:    { label: '依赖',     color: '#BA7517', dark: '#FAC775', dash: [6, 4], arrow: 'chevron',       width: 1.6 },
     event:     { label: '事件',     color: '#D4537E', dark: '#ED93B1', dash: [2, 3], arrow: 'chevron',       width: 1.6 },
     serialize: { label: '序列化引用', color: '#0F6E56', dark: '#5DCAA5', dash: [],   arrow: 'chevron',       width: 1.8 },
-    attach:    { label: '挂载组件', color: '#1D9E75', dark: '#9FE1CB', dash: [4, 3], arrow: 'chevron',       width: 1.4 }
+    attach:    { label: '挂载组件', color: '#1D9E75', dark: '#9FE1CB', dash: [4, 3], arrow: 'chevron',       width: 1.4 },
+    instantiate: { label: '实例化', color: '#6E7681', dark: '#8B949E', dash: [2, 3], arrow: 'chevron',     width: 1.1 }
   };
 
   var ACCESS_COLORS = {
@@ -55,7 +57,9 @@
     '定义': '#3FB950', '激活': '#E0A040', '注册': '#58A6FF', '注销': '#8B949E',
     '写入': '#F85149', '读取': '#39D2C0', '调用': '#A371F7', '字段类型': '#A371F7',
     '组合': '#58A6FF', '聚合': '#39D2C0', '序列化': '#3FB950', '依赖': '#8B949E',
-    '继承': '#E0A040', '实现': '#E0A040', '引用': '#A371F7'
+    '继承': '#E0A040', '实现': '#E0A040', '引用': '#A371F7',
+    '根·资产': '#EF9F27', '根·叶': '#39D2C0', '最终消费': '#3FB950',
+    '循环': '#F2555A'
   };
 
   /** 成员高亮按钮：把某类"复杂"成员的文字换成醒目颜色，便于一眼定位。 */
@@ -190,6 +194,9 @@
       fullName: typeof n.fullName === 'string' ? n.fullName : n.name,
       namespace: typeof n.namespace === 'string' ? n.namespace : '',
       outer: typeof n.outer === 'string' ? n.outer : '',
+      classKey: typeof n.classKey === 'string' ? n.classKey : '',
+      mountedOn: typeof n.mountedOn === 'string' ? n.mountedOn : '',
+      goKey: typeof n.goKey === 'string' ? n.goKey : '',
       baseTypes: Array.isArray(n.baseTypes) ? n.baseTypes.filter(isString) : [],
       guid: typeof n.guid === 'string' ? n.guid : '',
       filePath: typeof n.filePath === 'string' ? n.filePath : '',
@@ -275,6 +282,8 @@
       to: e.to,
       kind: EDGE_KINDS[e.kind] ? e.kind : 'depend',
       sourceMember: typeof e.sourceMember === 'string' ? e.sourceMember : '',
+      sourceComp: typeof e.sourceComp === 'string' ? e.sourceComp : '',
+      targetMember: typeof e.targetMember === 'string' ? e.targetMember : '',
       label: typeof e.label === 'string' ? e.label : '',
       note: typeof e.note === 'string' ? e.note : '',
       manual: !!e.manual,

@@ -6,6 +6,8 @@ GameObject:
   m_Component:
   - component: {fileID: 500001}
   - component: {fileID: 600000}
+  - component: {fileID: 600100}
+  - component: {fileID: 600200}
 --- !u!4 &500001
 Transform:
   m_GameObject: {fileID: 500000}
@@ -14,6 +16,22 @@ MonoBehaviour:
   m_GameObject: {fileID: 500000}
   m_Script: {fileID: 11500000, guid: 11111111111111111111111111111111, type: 3}
   playerPrefab: {fileID: 100100000, guid: 77777777777777777777777777777777, type: 3}
+  spawnTarget: {fileID: 800001}
+--- !u!114 &600100
+MonoBehaviour:
+  m_GameObject: {fileID: 500000}
+  m_Script: {fileID: 11500000, guid: 55555555555555555555555555555555, type: 3}
+  crossTarget: {fileID: 600000}
+--- !u!114 &600101
+MonoBehaviour:
+  m_GameObject: {fileID: 800000}
+  m_Script: {fileID: 11500000, guid: 55555555555555555555555555555555, type: 3}
+  crossTarget: {fileID: 600000}
+--- !u!114 &600200
+MonoBehaviour:
+  m_GameObject: {fileID: 500000}
+  m_Script: {fileID: 11500000, guid: 22222222222222222222222222222222, type: 3}
+  config: {fileID: 11400000, guid: 33333333333333333333333333333333, type: 2}
 --- !u!1 &800000
 GameObject:
   m_Name: EventSystem

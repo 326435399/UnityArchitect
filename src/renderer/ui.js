@@ -92,6 +92,43 @@
   }
 
   function hideContext() { el('context-menu').classList.add('hidden'); }
+
+  var HEALTH_DOT = { high: 'var(--danger)', warn: 'var(--warn)', info: 'var(--accent)' };
+  function healthColor(score) {
+    return score >= 85 ? 'var(--success)' : (score >= 70 ? 'var(--warn)' : 'var(--danger)');
+  }
+
+  /** 项目体检面板：分数环 + 分组问题清单，每条可点击直接定位（环条目进入环视图）。 */
+  function healthModal(app, rep) {
+    var groups = rep.groups.filter(function (g) { return g.count; }).map(function (g) {
+      var rows = g.items.map(function (it, i) {
+        return '<div class="list-row health-item" data-hg="' + esc(g.key) + '" data-hi="' + i + '">' +
+          '<span class="link">' + esc(it.label) + '</span>' +
+          '<span class="tag">' + esc(it.sub || '') + '</span></div>';
+      }).join('');
+      return '<div class="health-group">' +
+        '<h3><i class="health-dot" style="background:' + (HEALTH_DOT[g.severity] || 'var(--accent)') + '"></i>' +
+        esc(g.label) + ' · ' + g.count + '</h3>' + rows +
+        '<div class="health-hint">' + esc(g.hint) + '</div></div>';
+    }).join('');
+    var head = '<div class="health-head">' +
+      '<div class="health-score" style="--p:' + rep.score + ';--c:' + healthColor(rep.score) + '">' +
+      '<b>' + rep.score + '</b><span>' + esc(rep.grade) + '</span></div>' +
+      '<div class="health-brief">共发现 <b>' + rep.total + '</b> 处待处理 · ' +
+      esc(rep.metrics.scripts) + ' 个脚本 / ' + esc(rep.metrics.edges) + ' 条关系。' +
+      '分数只衡量结构风险，供参考；点击任意条目可直接定位，环条目会进入环形视图。</div></div>';
+    var host = modal({
+      title: '项目体检 · ' + (app.getProject().meta.name || ''),
+      body: head + (groups || '<div class="notice info">一切正常，没有发现结构性问题。</div>'),
+      buttons: [{ label: '关闭', primary: true }]
+    });
+    host.querySelectorAll('[data-hg]').forEach(function (btn) {
+      btn.onclick = function () {
+        app.action('health-open', { group: btn.dataset.hg, index: Number(btn.dataset.hi) });
+      };
+    });
+    return host;
+  }
   function contextMenu(x, y, items, app) {
     var menu = el('context-menu');
     menu.innerHTML = items.map(function (it, i) {
@@ -333,6 +370,8 @@
       '<div style="margin-top:10px">' +
       '<div class="kv"><label>命名空间</label><input value="' + esc(n.namespace) + '" disabled></div>' +
       (n.outer ? '<div class="kv"><label>嵌套于</label><input value="' + esc(n.outer) + '" disabled></div>' : '') +
+      (n.kind === 'component' ? '<div class="kv"><label>挂载于</label><input value="' + esc(n.mountedOn || '—') + '" disabled></div>' : '') +
+      (n.kind === 'component' ? '<div class="kv"><label>实例化类型</label><input value="' + esc((n.classKey || '').split('#').pop() || '—') + '" disabled></div>' : '') +
       '<div class="kv"><label>基类</label><input value="' + esc(n.baseTypes.join(', ')) + '" disabled></div>' +
       '<div class="kv"><label>文件路径</label><input value="' + esc(n.filePath || '—') + '" disabled></div>' +
       '</div><div class="kv" style="margin-top:8px"><button class="tbtn" data-action="goto" data-id="' + esc(n.id) + '">定位</button>' +
@@ -463,6 +502,8 @@
       'focus': m === 'focus',
       'trace-event': m === 'event',
       'trace-field': m === 'field',
+      'trace-root': m === 'root',
+      'health': m === 'cycle',
       'layout-assembly': m === 'assembly',
       'isolate': !!app.isolateSnapshot
     };
@@ -514,7 +555,7 @@
   UA.UI = {
     esc: esc, el: el, init: init, renderAll: renderAll, renderSelection: renderSelection, renderLeft: renderLeft,
     renderRight: renderRight, renderStatus: renderStatus, renderLegend: renderLegend,
-    toast: toast, modal: modal, closeModal: closeModal, contextMenu: contextMenu,
+    toast: toast, modal: modal, closeModal: closeModal, contextMenu: contextMenu, healthModal: healthModal,
     hideContext: hideContext, fmtTime: fmtTime, MENUS: MENUS, syncToolbar: syncToolbar
   };
 })(globalThis);

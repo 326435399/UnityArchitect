@@ -16,6 +16,10 @@
     var geoCache = Object.create(null);
     var edgeGeomCache = Object.create(null);
     var lastGeos = null, lastEdges = null;   // 渲染时缓存，命中测试直接复用
+    var traceGeomCache = Object.create(null); // trace 强调链几何（命中测试优先于普通边）
+    // 悬停对应引擎：hover 一条边/一个成员行/一个组件行 → 点亮相关的边与两端的行
+    var pairing = { edges: new Set(), rows: new Set(), active: false };
+    var callouts = []; // 悬停边的完整对应提示，渲染末尾画在最上层
     var truncCache = Object.create(null), truncCount = 0;
     var compIconCache = Object.create(null);
     var showMinimap = true;
@@ -168,6 +172,40 @@
       ctx.restore();
     }
 
+    /** 悬停对应：hover 边 → 点亮两端行；hover 成员行 → 点亮它发出的边；hover 组件行 → 点亮进/出它的边。 */
+    function computePairing(geoById) {
+      pairing.edges.clear(); pairing.rows.clear(); pairing.active = false;
+      if (!hover) return;
+      var p = project();
+      function addEdge(e) {
+        pairing.edges.add(e.id); pairing.active = true;
+        var src = geoById[e.from] && geoById[e.from].node, dst = geoById[e.to] && geoById[e.to].node;
+        if (!src || !dst) return;
+        // 源端行：组件实例卡点成员行（字段名），GameObject 卡点发起引用的组件行（sourceComp）
+        if (src.kind === 'component' && e.label) pairing.rows.add(e.from + '|member:' + e.label);
+        else if (e.sourceComp) pairing.rows.add(e.from + '|comp:' + e.sourceComp);
+        // 目标端行：GameObject 卡点被引用的组件行；其余（实例/类卡）整卡点亮
+        if (dst.kind === 'gameObject' || dst.kind === 'prefab' || dst.kind === 'scene') {
+          if (e.targetMember) pairing.rows.add(e.to + '|comp:' + e.targetMember);
+        } else pairing.rows.add(e.to + '|card:');
+      }
+      if (hover.type === 'edge' && hover.edge) { addEdge(hover.edge); return; }
+      if (hover.type === 'member' && hover.nodeId) {
+        var g0 = geoById[hover.nodeId];
+        var m = g0 && (g0.node.members || []).some ? (g0.node.members || []).find(function (x) { return x.id === hover.id; }) : null;
+        if (!m) return;
+        p.edges.forEach(function (e) { if (e.from === hover.nodeId && e.label === m.name) addEdge(e); });
+        return;
+      }
+      if (hover.type === 'comp' && hover.nodeId && hover.comp && hover.comp.type) {
+        var ct = hover.comp.type;
+        p.edges.forEach(function (e) {
+          if (e.from === hover.nodeId && e.sourceComp === ct) addEdge(e);
+          if (e.to === hover.nodeId && e.targetMember === ct) addEdge(e);
+        });
+      }
+    }
+
     function drawEdges(geos, edges, selectedIds, focusId, vr) {
       edgeGeomCache = Object.create(null);
       var byId = Object.create(null);
@@ -197,11 +235,12 @@
         var ctrl = { x: (p0.x + p2.x) / 2 + nx * bend, y: (p0.y + p2.y) / 2 + ny * bend };
         var relevant = selectedIds.has(e.from) || selectedIds.has(e.to) || (focusId && (e.from === focusId || e.to === focusId));
         var isHover = hover && hover.type === 'edge' && hover.id === e.id;
+        var isPaired = pairing.edges.has(e.id);
         var isSel = app.selectedEdgeId === e.id;
         ctx.save();
-        ctx.globalAlpha = e.stale ? 0.35 : (selectedIds.size && !relevant ? 0.28 : 0.92);
+        ctx.globalAlpha = e.stale ? 0.35 : (selectedIds.size && !relevant && !isPaired ? 0.28 : (isPaired ? 1 : 0.92));
         ctx.strokeStyle = color;
-        ctx.lineWidth = (isSel || isHover) ? style.width + 1.6 : style.width;
+        ctx.lineWidth = (isSel || isHover) ? style.width + 1.6 : (isPaired ? style.width + 1.2 : style.width);
         ctx.setLineDash(style.dash);
         ctx.beginPath();
         ctx.moveTo(p0.x, p0.y);
@@ -212,8 +251,11 @@
         var alpha = ctx.globalAlpha;
         ctx.restore();
         edgeGeomCache[e.id] = { p0: p0, p2: p2, ctrl: ctrl };
+        // 悬停边：收集完整对应提示（源.字段 ▸ 目标.组件），渲染末尾统一画在最上层
+        if (isHover) callouts.push({ edge: e, p0: p0, ctrl: ctrl, p2: p2 });
         var label = e.label || (e.sourceMember ? e.sourceMember.split('#').pop() : '');
-        if (label && (view.scale > 0.5 || relevant)) {
+        // 标签降噪：只在缩放足够大、边被选中/聚焦、或被悬停对应点亮时显示
+        if (label && (view.scale > 1.6 || relevant || isPaired)) {
           // Canonical normal per node pair (independent of edge direction) so
           // labels of parallel edges stack on the same side without crossing.
           var idA = e.from < e.to ? e.from : e.to, idB = e.from < e.to ? e.to : e.from;
@@ -261,10 +303,11 @@
       var dim = focusId && !selected && focusId !== n.id && !app.focusNeighbors.has(n.id);
       ctx.save();
       ctx.globalAlpha = n.stale ? 0.55 : (dim ? 0.35 : 1);
+      var cardPaired = pairing.rows.has(n.id + '|card:');
       roundRect(g.x, g.y, g.w, g.h, 9);
       ctx.fillStyle = t.card; ctx.fill();
-      ctx.strokeStyle = selected ? t.selection : (isHover ? color : t.cardBorder);
-      ctx.lineWidth = selected ? 2.2 : (isHover ? 1.6 : 1);
+      ctx.strokeStyle = selected ? t.selection : (isHover ? color : (cardPaired ? color : t.cardBorder));
+      ctx.lineWidth = selected ? 2.2 : ((isHover || cardPaired) ? 1.6 : 1);
       if (n.stale) ctx.setLineDash([5, 4]);
       ctx.stroke(); ctx.setLineDash([]);
       ctx.save();
@@ -277,13 +320,12 @@
       ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
       ctx.fillStyle = t.text;
       ctx.fillText(truncate(n.name, g.w - (roles.length ? 116 : 62)), g.x + 12, g.y + Layout.HEADER_H / 2);
-      var hasHeaderRoles = drawRoleChips(g, roles);
-      if (!hasHeaderRoles) {
-        ctx.font = '10px "Segoe UI", sans-serif';
-        ctx.textAlign = 'right';
-        ctx.fillStyle = color;
-        ctx.fillText(S.kindBadge(n), g.x + g.w - 9, g.y + Layout.HEADER_H / 2);
-      }
+      var hasHeaderRoles = drawRoleChips(g, roles, 20);
+      // 类型字母徽标恒画在右上角；角色徽章让位到它左侧——不能为角色徽章牺牲节点类型标识
+      ctx.font = '10px "Segoe UI", sans-serif';
+      ctx.textAlign = 'right';
+      ctx.fillStyle = color;
+      ctx.fillText(S.kindBadge(n), g.x + g.w - 9, g.y + Layout.HEADER_H / 2);
       g.rows.forEach(function (row) {
         if (row.kind === 'header') return;
         // LOD：缩到看不清文字时只画标题，省掉成百上千行文本绘制。
@@ -300,6 +342,13 @@
           var m = row.member;
           var isHoverRow = hover && hover.type === 'member' && hover.id === m.id;
           if (isHoverRow) { ctx.fillStyle = t.panelAlt; ctx.fillRect(g.x + 4, g.y + row.y, g.w - 8, row.h); }
+          // 悬停对应：该成员是被悬停边/组件行点亮的引用方
+          var isPairedRow = pairing.rows.has(n.id + '|member:' + m.name);
+          if (isPairedRow) {
+            ctx.fillStyle = color + '2E'; ctx.fillRect(g.x + 4, g.y + row.y, g.w - 8, row.h);
+            ctx.strokeStyle = color; ctx.lineWidth = 1.2;
+            ctx.strokeRect(g.x + 4.5, g.y + row.y + 0.5, g.w - 9, row.h - 1);
+          }
           var rowRoles = roles.filter(function (r) { return r.member === m.name; });
           var reserve = 0;
           if (rowRoles.length) {
@@ -327,7 +376,7 @@
             ctx.textAlign = 'center';
             for (var ri = rowRoles.length - 1; ri >= 0; ri--) {
               var rr = rowRoles[ri];
-              var rc = TRACE_ROLE_COLOR[rr.role] || t.text2;
+              var rc = TRACE_ROLE_COLOR[rr.role] || (rr.member ? '#3FB950' : t.text2);
               var cw = ctx.measureText(rr.role).width + 14;
               rx -= cw + 4;
               roundRect(rx, y - 8, cw, 16, 8);
@@ -343,11 +392,44 @@
           var comp = row.comp || {};
           var isHoverComp = hover && hover.type === 'comp' && hover.id === 'comp:' + n.id + ':' + (comp.fileId || comp.type);
           if (isHoverComp) { ctx.fillStyle = t.panelAlt; ctx.fillRect(g.x + 4, g.y + row.y, g.w - 8, row.h); }
+          // 悬停对应：该组件行是被悬停边点亮的引用方 / 被引用方
+          var isPairedComp = pairing.rows.has(n.id + '|comp:' + comp.type);
+          if (isPairedComp) {
+            ctx.fillStyle = color + '2E'; ctx.fillRect(g.x + 4, g.y + row.y, g.w - 8, row.h);
+            ctx.strokeStyle = color; ctx.lineWidth = 1.2;
+            ctx.strokeRect(g.x + 4.5, g.y + row.y + 0.5, g.w - 9, row.h - 1);
+          }
+          // 环视图 / 追踪：被引用的组件行右侧也挂角色徽章（如「序列化」），与成员行一致
+          var compRoles = roles.filter(function (r) { return r.member === comp.type; });
+          var compReserve = 0;
+          if (compRoles.length) {
+            ctx.font = '600 10px "Segoe UI", "Microsoft YaHei", sans-serif';
+            compRoles.forEach(function (r) { compReserve += ctx.measureText(r.role).width + 16; });
+            compReserve += 8;
+          }
           ctx.font = '11px "Segoe UI", "Microsoft YaHei", sans-serif';
           ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
           drawCompIcon(comp, g.x + 10, y);
           ctx.fillStyle = comp.enabled === false ? t.text3 : t.text;
-          ctx.fillText(truncate(row.text, g.w - 46), g.x + 32, y);
+          ctx.fillText(truncate(row.text, g.w - 46 - compReserve), g.x + 32, y);
+          if (compRoles.length) {
+            var crx = g.x + g.w - 8;
+            ctx.font = '600 10px "Segoe UI", "Microsoft YaHei", sans-serif';
+            ctx.textAlign = 'center';
+            for (var cri = compRoles.length - 1; cri >= 0; cri--) {
+              var crr = compRoles[cri];
+              var crc = TRACE_ROLE_COLOR[crr.role] || (crr.member ? '#3FB950' : t.text2);
+              var ccw = ctx.measureText(crr.role).width + 14;
+              crx -= ccw + 4;
+              roundRect(crx, y - 8, ccw, 16, 8);
+              ctx.fillStyle = t.card; ctx.fill();
+              ctx.fillStyle = crc + '2E'; ctx.fill();
+              ctx.strokeStyle = crc; ctx.lineWidth = 1; ctx.stroke();
+              ctx.fillStyle = crc;
+              ctx.fillText(crr.role, crx + ccw / 2, y);
+            }
+            ctx.textAlign = 'left';
+          }
         } else if (row.kind === 'more') {
           var isHoverMore = hover && hover.type === 'more' && hover.nodeId === n.id;
           if (isHoverMore) { ctx.fillStyle = t.panelAlt; ctx.fillRect(g.x + 4, g.y + row.y, g.w - 8, row.h); }
@@ -574,20 +656,24 @@
     var TRACE_ROLE_COLOR = S.ROLE_TONE;
 
     /** Role chips drawn on a node: header-level fallback and per-member (定义/注册/激活…). */
-    function drawRoleChips(g, roles) {
+    function drawRoleChips(g, roles, reserve) {
       var t = theme();
       // 成员级徽章贴在成员行旁；若该成员行被截断没显示，则退回标题栏，保证不丢标识。
       var visibleNames = null;
       function memberVisible(name) {
         if (!visibleNames) {
           visibleNames = Object.create(null);
-          g.rows.forEach(function (row) { if (row.kind === 'member') visibleNames[row.member.name] = true; });
+          g.rows.forEach(function (row) {
+            if (row.kind === 'member') visibleNames[row.member.name] = true;
+            else if (row.kind === 'comp' && row.comp) visibleNames[row.comp.type] = true; // 组件行也能承接徽章
+          });
         }
         return !!visibleNames[name];
       }
       var headerRoles = roles.filter(function (r) { return !r.member || !memberVisible(r.member); });
       if (headerRoles.length) {
-        var x = g.x + g.w - 9;
+        // reserve：右侧预留给类型字母徽标（C/GO/Co…）的空间，角色徽章从它左侧往左排
+        var x = g.x + g.w - 9 - (reserve || 0) - 4;
         ctx.font = '600 10px "Segoe UI", "Microsoft YaHei", sans-serif';
         ctx.textBaseline = 'middle'; ctx.textAlign = 'center';
         for (var hi = headerRoles.length - 1; hi >= 0; hi--) {
@@ -612,6 +698,7 @@
       if (!links || !links.length) return;
       var t = theme(), byId = Object.create(null);
       geos.forEach(function (g) { byId[g.node.id] = g; });
+      var li = 0;
       links.forEach(function (ln) {
         var a = byId[ln.from], b = byId[ln.to];
         if (!a || !b || ln.from === ln.to || !ln.label) return;
@@ -622,22 +709,63 @@
         var nx = -dy / len, ny = dx / len;
         var bend = Math.min(110, Math.max(36, len * 0.18));
         var ctrl = { x: (p0.x + p2.x) / 2 + nx * bend, y: (p0.y + p2.y) / 2 + ny * bend };
+        // 带边 id 的链（环视图的逐边红链）参与悬停对应：记录几何供命中测试
+        var isHl = false;
+        if (ln.id) {
+          traceGeomCache[ln.id] = { p0: p0, p2: p2, ctrl: ctrl };
+          isHl = pairing.edges.has(ln.id) || (hover && hover.type === 'edge' && hover.id === ln.id);
+        }
         ctx.save();
-        ctx.strokeStyle = ln.color; ctx.lineWidth = 2.2;
+        ctx.strokeStyle = ln.color; ctx.lineWidth = isHl ? 3.4 : 2.2;
         ctx.beginPath(); ctx.moveTo(p0.x, p0.y);
         ctx.quadraticCurveTo(ctrl.x, ctrl.y, p2.x, p2.y);
         ctx.stroke();
         drawArrow(p2, bezier(p0, ctrl, p2, 0.9), 'triangle', ln.color, t.card);
         var mid = bezier(p0, ctrl, p2, 0.5);
-        ctx.font = '600 11px "Segoe UI", "Microsoft YaHei", sans-serif';
-        var tw = ctx.measureText(ln.label).width;
-        roundRect(mid.x - tw / 2 - 9, mid.y - 10, tw + 18, 20, 10);
-        ctx.fillStyle = t.card; ctx.fill();
-        ctx.strokeStyle = ln.color; ctx.lineWidth = 1.2; ctx.stroke();
-        ctx.fillStyle = ln.color; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-        ctx.fillText(ln.label, mid.x, mid.y);
+        if (ln.id) {
+          // 悬停对应的链不画常驻标签，完整对应由 callout 展示
+          if (isHl) callouts.push({ edge: project().edges.find(function (e) { return e.id === ln.id; }), p0: p0, ctrl: ctrl, p2: p2 });
+        } else {
+          // 节点级链（注册/激活/写入/读取）：标签常驻，双向链按索引上下交错让开
+          var labelY = mid.y + (li % 2 ? 16 : -16);
+          li += 1;
+          ctx.font = '600 11px "Segoe UI", "Microsoft YaHei", sans-serif';
+          var tw = ctx.measureText(ln.label).width;
+          roundRect(mid.x - tw / 2 - 9, labelY - 10, tw + 18, 20, 10);
+          ctx.fillStyle = t.card; ctx.fill();
+          ctx.strokeStyle = ln.color; ctx.lineWidth = 1.2; ctx.stroke();
+          ctx.fillStyle = ln.color; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+          ctx.fillText(ln.label, mid.x, labelY);
+        }
         ctx.restore();
       });
+    }
+
+    /** 悬停边的完整对应提示：「源.字段 ▸ 目标.组件」，画在最上层。 */
+    function drawCallouts() {
+      if (!callouts.length) return;
+      var t = theme();
+      var byId = Object.create(null);
+      project().nodes.forEach(function (n) { byId[n.id] = n; });
+      ctx.save();
+      ctx.font = '600 11px "Segoe UI", "Microsoft YaHei", sans-serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      callouts.forEach(function (c) {
+        var e = c.edge;
+        var src = e && byId[e.from], dst = e && byId[e.to];
+        if (!src || !dst) return;
+        var field = e.label || e.sourceMember || (S.EDGE_KINDS[e.kind] || {}).label || '引用';
+        var text = truncate(src.name + '.' + field + '  ▸  ' + dst.name + (e.targetMember ? '.' + e.targetMember : ''), 320);
+        var mid = bezier(c.p0, c.ctrl, c.p2, 0.5);
+        var ly = mid.y - 30;
+        var tw = ctx.measureText(text).width;
+        roundRect(mid.x - tw / 2 - 9, ly - 10, tw + 18, 20, 10);
+        ctx.fillStyle = t.card; ctx.fill();
+        ctx.strokeStyle = t.selection; ctx.lineWidth = 1.2; ctx.stroke();
+        ctx.fillStyle = t.text;
+        ctx.fillText(text, mid.x, ly);
+      });
+      ctx.restore();
     }
 
     /** Column captions above a trace layout (定义 | 注册 | 激活 …). */
@@ -680,6 +808,11 @@
       var geos = visibleGeos();
       var edges = visibleEdgeList(geos);
       lastGeos = geos; lastEdges = edges;
+      traceGeomCache = Object.create(null);
+      callouts = [];
+      var geoById = Object.create(null);
+      geos.forEach(function (g) { geoById[g.node.id] = g; });
+      computePairing(geoById);
       var selectedIds = app.selection;
       // 屏幕可见范围（世界坐标），用于剔除屏幕外的节点与连线。
       var v0 = toWorld(0, 0), v1 = toWorld(cw, ch);
@@ -696,6 +829,7 @@
       drawTraceLinks(drawn);
       drawTraceHeaders();
       drawn.forEach(function (g) { drawNode(g, selectedIds, app.focusId); });
+      drawCallouts();
       ctx.restore();
       drawMarquee();
       drawMinimap(geos);
@@ -716,6 +850,22 @@
         }
       }
       var edges = lastEdges || visibleEdgeList(geos);
+      // trace 强调链（环视图红链等）画在最上层，优先命中
+      var trace = app.traceLinks;
+      if (trace && trace.length) {
+        var tth = 9 / view.scale;
+        for (var q = trace.length - 1; q >= 0; q--) {
+          var tg = traceGeomCache[trace[q].id];
+          if (!tg) continue;
+          for (var tq = 0; tq <= 1; tq += 0.05) {
+            var tp = bezier(tg.p0, tg.ctrl, tg.p2, tq);
+            if (Math.abs(tp.x - w.x) < tth && Math.abs(tp.y - w.y) < tth) {
+              var pe = project().edges.find(function (x) { return x.id === trace[q].id; });
+              return { type: 'edge', id: trace[q].id, edge: pe || trace[q], world: w };
+            }
+          }
+        }
+      }
       var threshold = 7 / view.scale;
       for (var j = edges.length - 1; j >= 0; j--) {
         var geo = edgeGeomCache[edges[j].id];
@@ -879,6 +1029,9 @@
       zoom: zoom, hitTest: hitTest, toWorld: toWorld, toScreen: toScreen,
       nodeGeo: nodeGeo, invalidateGeo: invalidateGeo, visibleGeos: visibleGeos,
       setMinimap: setMinimap,
+      // 测试/自动化钩子：直接设定 hover 状态并重绘（真实鼠标路径走 mousemove 处理器）
+      debugSetHover: function (h) { hover = h; scheduleRender(); },
+      debugPairing: function () { return { edges: Array.from(pairing.edges), rows: Array.from(pairing.rows) }; },
       getView: function () { return Object.assign({}, view); },
       toDataURL: function () {
         flushRender(); // 导出前先补上挂起的重绘，避免截到旧画面

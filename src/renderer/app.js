@@ -104,6 +104,7 @@
     trace: null, traceDetail: null, assemblyGroups: null,
     traceRoles: null, traceLinks: null, traceColumnBounds: null,
     canvasMode: null, memberHighlight: new Set(),
+    health: null,
     expandedNodes: new Set(),
     leftTab: 'resources', rightTab: 'inspector',
     collapsedKinds: new Set(), showMinimap: true,
@@ -139,6 +140,7 @@
     app.selectedEdgeId = null; app.focusId = null; app.focusNeighbors = new Set();
     app.focusSnapshot = null; app.focusSide = 'both'; app.focusDepth = 1; app.trace = null; app.traceDetail = null; app.assemblyGroups = null;
     app.traceRoles = null; app.traceLinks = null; app.traceColumnBounds = null; app.canvasMode = null;
+    app.health = null;
     app.expandedNodes = new Set();
     app.isolateSnapshot = null;
     document.body.dataset.theme = project.view.theme;
@@ -201,6 +203,7 @@
       } else {
         items.push({ label: '数据流向', action: 'trace-field', data: {}, key: 'T' });
       }
+      items.push({ label: '溯源根', action: 'trace-root', data: { id: hit.nodeId }, key: 'R' });
       if (mem && mem.kind === 'event') {
         items.push({ label: '事件追踪 · ' + mem.name, action: 'trace-event',
           data: { event: mem.name, type: n.sourceKey || '' } });
@@ -314,7 +317,8 @@
   /** Focus edge kind → role badge text (drawn next to the referencing member row). */
   var FOCUS_ROLE = {
     compose: '组合', aggregate: '聚合', serialize: '序列化', depend: '依赖',
-    use: '引用', event: '引用', inherit: '继承', implement: '实现'
+    use: '引用', event: '引用', inherit: '继承', implement: '实现',
+    attach: '挂载', instantiate: '实例'
   };
 
   /** Focus mode member badges: mark which member of each neighbour references the focused type. */
@@ -333,6 +337,131 @@
       addRole(roles, holder, text, memberName);
     });
     return roles;
+  }
+
+  /**
+   * 子图成员徽章：对保留子图内的每条边，在引用方节点上挂「关系 + 成员名」徽章，
+   * 让中间过程也能看出是谁的哪个成员在引用（溯源根等全图追踪模式共用）。
+   */
+  function buildEdgeRoles(keep, base) {
+    var roles = base || Object.create(null);
+    project.edges.forEach(function (e) {
+      if (!keep.has(e.from) || !keep.has(e.to)) return;
+      var node = Model.getNode(project, e.from);
+      if (!node) return;
+      var toNode = Model.getNode(project, e.to);
+      var goLike = function (n) { return n && (n.kind === 'gameObject' || n.kind === 'prefab' || n.kind === 'scene'); };
+      var text = FOCUS_ROLE[e.kind] || '引用';
+      var memberName = e.label && (node.members || []).some(function (m) { return m.name === e.label; })
+        ? e.label : null;
+      // GameObject 引用方：徽章落到「发起引用的组件行」，文字显示字段名
+      //（如 MerchantController 行 → playerTransform），而不是无信息的对象头部徽章
+      if (e.sourceComp && goLike(node)) addRole(roles, e.from, e.label || text, e.sourceComp);
+      else addRole(roles, e.from, text, memberName);
+      // 对象级引用：在「被引用的对象」卡片上，给被指向的那个组件行挂徽章；
+      // 组件实例之间的引用边本身已落在实例卡片上，无需再挂
+      if (e.targetMember && goLike(toNode)) addRole(roles, e.to, text, e.targetMember);
+    });
+    return roles;
+  }
+
+  /** 数据溯源：左列数据根（SO 资产 / 代码叶子），右列顶层消费者；中间是起点。 */
+  function applyRootTrace(fid) {
+    var res = Analysis.rootTrace(project, fid);
+    if (!res.counts.roots && !res.counts.consumers) {
+      UI.toast('「' + (res.origin ? res.origin.name : '') + '」没有可追溯的数据引用'); return;
+    }
+    exitModeSilent();
+    traceSnapshot();
+    var lay = Layout.focusLayout(project, fid, { full: true, flip: true });
+    var keep = new Set(lay.ids);
+    Layout.applyPositions(project, lay.positions);
+    project.nodes.forEach(function (n) { n.visible = keep.has(n.id); });
+    app.focusId = fid;
+    app.focusNeighbors = keep;
+    app.focusSide = 'both';
+    app.focusDepth = 1;
+    app.canvasMode = 'root';
+    app.trace = { kind: 'root', name: res.origin.name, id: fid };
+    var roles = Object.create(null);
+    if (res.originRootKind) addRole(roles, fid, '根·' + res.originRootKind, null);
+    res.roots.forEach(function (r) { addRole(roles, r.id, r.asset ? '根·资产' : '根·叶', null); });
+    res.consumers.forEach(function (c) { addRole(roles, c.id, '最终消费', null); });
+    // 中间过程同样标出「谁的哪个成员在引用」，和数据流向/聚焦依赖保持一致
+    buildEdgeRoles(keep, roles);
+    app.traceRoles = roles;
+    app.traceLinks = null;
+    app.traceColumnBounds = lay.columnBounds || null;
+    if (canvas) { canvas.invalidateGeo(); canvas.render(); }
+    UI.renderAll(app);
+    setTimeout(function () { if (canvas) canvas.fit(); }, 20);
+    UI.toast('数据溯源「' + res.origin.name + '」· ' +
+      (res.counts.roots
+        ? '根 ' + res.counts.roots + ' 个（资产 ' + res.counts.assetRoots + ' / 叶 ' + res.counts.leafRoots + '）'
+        : '本身即根') +
+      ' · 最终消费 ' + res.counts.consumers + ' 个' + (res.cycles ? ' · 循环 ' + res.cycles + ' 处' : '') + '（再点一次退出）');
+    UI.syncToolbar(app);
+  }
+
+  /** 项目体检：把分析结果整理成问题清单，弹窗里每条都可点击定位。 */
+  function showHealth() {
+    app.health = Analysis.healthReport(project);
+    UI.healthModal(app, app.health);
+  }
+
+  /** 环视图：只留下环内的类，按引用顺序在圆周上排开，环上的关系用红色强调。 */
+  function applyCycleView(item) {
+    var ids = (item && item.nodeIds) || [];
+    var res = Layout.cycleLayout(project, ids);
+    if (!res.ids.length) { UI.toast('这个环里的类已不存在'); return; }
+    exitModeSilent();
+    traceSnapshot();
+    var keep = new Set(res.ids);
+    Layout.applyPositions(project, res.positions);
+    project.nodes.forEach(function (n) { n.visible = keep.has(n.id); });
+    app.focusId = res.ids[0];
+    app.focusNeighbors = keep;
+    app.focusSide = 'both';
+    app.focusDepth = 1;
+    app.canvasMode = 'cycle';
+    app.trace = { kind: 'cycle', name: (item && item.label) || '循环依赖', id: res.ids[0] };
+    var roles = Object.create(null);
+    res.ids.forEach(function (id) { addRole(roles, id, '循环', null); });
+    app.traceRoles = buildEdgeRoles(keep, roles);
+    var links = [];
+    project.edges.forEach(function (e) {
+      if (!keep.has(e.from) || !keep.has(e.to)) return;
+      var kindLabel = (S.EDGE_KINDS[e.kind] || {}).label || '引用';
+      var label = e.label || kindLabel;
+      // 引用落在具体组件上时（GameObject 间 fileID 引用），标签带上组件名
+      if (e.targetMember) label += ' · ' + e.targetMember;
+      links.push({ id: e.id, from: e.from, to: e.to, label: label, color: '#f2555a' });
+    });
+    app.traceLinks = links;
+    app.traceColumnBounds = null;
+    if (canvas) { canvas.invalidateGeo(); canvas.render(); }
+    UI.renderAll(app);
+    setTimeout(function () { if (canvas) canvas.fit(); }, 20);
+    UI.toast('循环依赖 · ' + res.ids.length + ' 个类首尾相连（再点一次退出）');
+    UI.syncToolbar(app);
+  }
+
+  /** 体检清单里点一条：环 → 环视图；其余 → 选中并飞到该节点。 */
+  function openHealthIssue(groupKey, index) {
+    var rep = app.health;
+    if (!rep) return;
+    var group = null;
+    rep.groups.forEach(function (g) { if (g.key === groupKey) group = g; });
+    var item = group && group.items[index];
+    if (!item) return;
+    UI.closeModal();
+    if (item.open === 'cycle') { applyCycleView(item); return; }
+    var id0 = item.nodeIds && item.nodeIds[0];
+    if (!id0) return;
+    if (app.canvasMode) exitFocusLayout();
+    app.setSelection(new Set([id0]), null, null);
+    app.setTab('right', 'inspector');
+    if (canvas) canvas.flyTo(id0);
   }
 
   /** Focus mode: re-layout only the dependency neighbourhood (upstream left, downstream right). */
@@ -637,14 +766,16 @@
       if (n.namespace) lines.push('- 命名空间：`' + n.namespace + '`');
       if (n.filePath) lines.push('- 文件：`' + n.filePath + '`');
       if (n.baseTypes.length) lines.push('- 基类 / 接口：' + n.baseTypes.join(', '));
-      var mounts = project.edges.filter(function (e) { return e.kind === 'attach' && e.to === n.id && byId[e.from]; });
+      var mounts = project.edges.filter(function (e) { return e.kind === 'instantiate' && e.to === n.id && byId[e.from]; })
+        .map(function (e) { return byId[e.from]; })
+        .filter(function (inst) { return inst.kind === 'component'; });
       if (mounts.length) {
-        lines.push('- 挂载于：' + mounts.map(function (e) {
-          return '`' + byId[e.from].name + '`' + (byId[e.from].filePath ? '（' + byId[e.from].filePath + '）' : '');
+        lines.push('- 挂载于：' + mounts.map(function (inst) {
+          return '`' + inst.name + '`' + (inst.mountedOn ? '（挂载于 ' + inst.mountedOn + (inst.filePath ? ' · ' + inst.filePath : '') + '）' : '');
         }).join('、'));
       }
-      // GameObject / 预制体 / 场景节点：列出挂载了哪些脚本。
-      var attached = project.edges.filter(function (e) { return e.kind === 'attach' && e.from === n.id && byId[e.to]; });
+      // GameObject / 预制体 / 场景节点：列出挂载了哪些脚本组件实例。
+      var attached = project.edges.filter(function (e) { return e.kind === 'attach' && e.from === n.id && byId[e.to] && byId[e.to].kind === 'component'; });
       if (attached.length) {
         lines.push('- 挂载脚本：' + attached.map(function (e) {
           return '`' + byId[e.to].name + '`';
@@ -732,7 +863,9 @@
     '<ul style="padding-left:18px">',
     '<li>工具栏 <b>事件 / 协程 / UnityEvent / 委托</b> 四个高亮开关：点亮的类别成员文字变醒目颜色并加粗，再点一次恢复</li>',
     '<li>聚焦依赖 / 事件追踪 / 数据流向 / Assembly 分层 / 孤立选中 是<b>互斥模式</b>：切入新模式时旧模式自动退出还原，当前模式按钮持续发光；再点一次（或 Esc）退出</li>',
-    '<li>右键菜单：<b>定位到（F）</b>、<b>聚焦依赖 / 取消聚焦依赖（G）</b>、<b>数据流向（T）</b>；右键到成员行时追踪直接对准该成员</li>',
+    '<li>右键菜单：<b>定位到（F）</b>、<b>聚焦依赖 / 取消聚焦依赖（G）</b>、<b>数据流向（T）</b>、<b>溯源根（R）</b>；右键到成员行时追踪直接对准该成员</li>',
+    '<li><b>溯源根</b>：左列数据根（SO 资产 = 根·资产，无出边的代码叶子 = 根·叶），右列最终消费者；引用 SO 脚本类时根自动定位到 .asset 实例；循环引用明确报「循环 N 处」；中间节点同样标出「谁的哪个成员在引用」（组合 / 聚合 / 依赖 / 引用徽章），与数据流向保持一致</li>',
+    '<li><b>项目体检（工具栏「体检」或快捷键 H）</b>：一键诊断循环依赖、耦合中心（被引用最多的类）、上帝类（成员过多）、孤立脚本、空壳类型、缺命名空间、失效节点，给出健康分与逐条清单；<b>点击环条目进入环形视图</b>——环内的类排成一圈、关系线用红色强调，再点一次退出；其余条目点击即选中并飞到该节点</li>',
     '<li>滚轮缩放、空白处拖动平移、节点拖拽移动、框选多选、双击节点定位；Ctrl+K 全局检索、Ctrl+A 全选、F 适应画布、Esc 退出当前模式</li>',
     '<li>默认黑色主题，右上「主题」可切换明暗；小地图可在「筛选 → 显示」里关闭</li>',
     '</ul>',
@@ -789,6 +922,22 @@
         app.setSelection(new Set([id]), null, null);
         canvas.flyTo(id);
         break;
+      case 'health': {
+        if (app.canvasMode === 'cycle') { exitFocusLayout(); break; }
+        showHealth();
+        break;
+      }
+      case 'health-open': {
+        openHealthIssue(data && data.group, Number(data && data.index));
+        break;
+      }
+      case 'trace-root': {
+        var rid = (data && data.id) || (app.selection.size ? Array.from(app.selection)[0] : null);
+        if (!rid) { UI.toast('请先选中一个节点'); break; }
+        if (app.canvasMode === 'root' && app.trace && app.trace.id === rid) { exitFocusLayout(); break; }
+        applyRootTrace(rid);
+        break;
+      }
       case 'focus': {
         if (!app.selection.size) { UI.toast('请先选中一个节点'); break; }
         var fid = Array.from(app.selection)[0];
@@ -857,7 +1006,7 @@
         var presetName = preset === 'all' ? '全部' : (preset === 'mounts' ? '含挂载' : '仅脚本');
         var allowed = {
           scripts: ['class', 'interface', 'struct', 'enum', 'scriptableObject'],
-          mounts: ['class', 'interface', 'struct', 'enum', 'scriptableObject', 'gameObject', 'prefab', 'scene'],
+          mounts: ['scriptableObject', 'gameObject', 'prefab', 'scene', 'component'],
           all: Object.keys(S.NODE_KINDS)
         }[preset];
         exitModeSilent();
@@ -944,10 +1093,7 @@
         break;
       }
       case 'show-cycles': {
-        var cs = app.getSummary().cycles;
-        UI.modal({ title: '循环依赖 · ' + cs.length, body: cs.length ? cs.map(function (c, i) {
-          return '<div class="notice danger">环 ' + (i + 1) + '：' + esc(c.nodeIds.map(function (x) { var n = Model.getNode(project, x); return n ? n.name : x; }).join(' → ')) + '</div>';
-        }).join('') : '<div class="notice info">未检测到循环依赖</div>', buttons: [{ label: '关闭', primary: true }] });
+        showHealth(); // 循环依赖清单已并入项目体检，条目可点击进入环视图
         break;
       }
       case 'show-isolated': {
@@ -994,7 +1140,7 @@
               (a.repo ? '<div style="margin-top:4px"><a href="' + esc(a.repo.replace(/^开源地址[：:]\s*/, '')) + '" target="_blank" rel="noopener" style="color:var(--accent)">' + esc(a.repo) + '</a></div>' : '') +
               (a.license ? '<div style="margin-top:4px;color:var(--text3)">' + esc(a.license) + '</div>' : '') +
               '</div>' : '') +
-          '<p style="margin-top:8px;color:var(--text3)">快捷键：Ctrl+K 检索 · Ctrl+A 全选 · F 适应 · L 布局 · Esc 退出当前模式</p>',
+          '<p style="margin-top:8px;color:var(--text3)">快捷键：Ctrl+K 检索 · Ctrl+A 全选 · F 定位/适应 · G 聚焦 · T 数据流向 · R 溯源根 · H 体检 · L 布局 · Esc 退出当前模式</p>',
           buttons: [{ label: '关闭', primary: true }] });
         break;
       }
@@ -1025,7 +1171,9 @@
       }
       if (k === 'g') { action('focus'); return; }   // G：聚焦依赖 ⇄ 取消聚焦
       if (k === 't') { action('trace-field'); return; } // T：数据流向（选中节点的字段）
+      if (k === 'r') { action('trace-root'); return; }  // R：数据溯源（根在左 / 消费者在右）
       if (k === 'l') { action('layout-layered'); return; }
+      if (k === 'h') { action('health'); return; }  // H：项目体检 / 退出环视图
     });
   }
 
