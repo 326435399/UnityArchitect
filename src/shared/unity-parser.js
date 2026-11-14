@@ -459,6 +459,7 @@
       docs.forEach(function (d) {
         var name = findScalar(d.body, 'm_Name');
         var ownerKey = key;
+        var scriptInstCreated = false; // 本文档的脚本组件是否已升为实例节点（是则不进组件清单）
         // 预制体实例里被 stripped 的文档：不单独建节点，记下它对应预制体里的哪个对象。
         var stripped = /m_CorrespondingSourceObject:\s*\{\s*fileID:\s*(-?\d+)[^}]*guid:\s*([0-9a-fA-F]{32})/.exec(d.body);
         if (stripped) {
@@ -502,11 +503,15 @@
               pushEdge(goKey, instKey, 'attach', '', '挂载 ' + inst.name);
               pushEdge(instKey, typeKey, 'instantiate', '', '实例化');
               ownerKey = instKey; // 序列化引用由「实例」持有，而不是GameObject
+              scriptInstCreated = true;
             }
           }
           if (ownerKey === key) ownerKey = goKey; // 未解析脚本（官方包/失效引用）：退回 GameObject 持有
         }
         // 组件清单：任何带 m_GameObject 的文档（Transform / Rigidbody / 自定义脚本…）
+        // 已升为实例节点的脚本组件不列行——挂载关系由 attach 边 + 实例卡单一表达，
+        // 否则 GO 卡组件行、attach 边、实例化链三处重复同一事实。
+        // 但 compNameByFileId 注册必须保留：对象引用边靠它标出「引用方组件」。
         var compGo = gameObjectId(d.body);
         if (compGo && !isAssetFile && d.classId !== '115') {
           var cname = CLASS_NAMES[d.classId] || ('Component(' + d.classId + ')');
@@ -520,11 +525,13 @@
               else cname = scriptNameByGuid[csg] || cname; // 官方包脚本（EventSystem 等）按 meta 文件名
             }
           }
-          (compsByGo[compGo] = compsByGo[compGo] || []).push({
-            type: cname, classId: d.classId, fileId: d.fileId,
-            nodeKey: cKey, isScript: cIsScript, enabled: findScalar(d.body, 'm_Enabled') !== '0'
-          });
           compNameByFileId[d.fileId] = cname; // fileID → 组件名：对象引用边要标出「被引用的具体组件」
+          if (!(cIsScript && scriptInstCreated)) {
+            (compsByGo[compGo] = compsByGo[compGo] || []).push({
+              type: cname, classId: d.classId, fileId: d.fileId,
+              nodeKey: cKey, isScript: cIsScript, enabled: findScalar(d.body, 'm_Enabled') !== '0'
+            });
+          }
           // 脚本组件没解析出名字（官方包脚本缺 PackageCache / 已删除脚本的失效引用）
           if (cIsScript && cname === 'MonoBehaviour') unresolvedScriptComps++;
         }

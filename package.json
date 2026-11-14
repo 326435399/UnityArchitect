@@ -1,7 +1,7 @@
 {
   "name": "unity-architect",
   "productName": "Unity Architect",
-  "version": "2.10.0",
+  "version": "2.12.1",
   "description": "Unity 引用关系梳理与 UML 架构分析桌面工具",
   "main": "electron/main.js",
   "private": true,
@@ -30,7 +30,10 @@
       "package.json"
     ],
     "win": {
-      "target": ["nsis", "portable"],
+      "target": [
+        "nsis",
+        "portable"
+      ],
       "artifactName": "UnityArchitect-${version}-${arch}.${ext}"
     }
   }

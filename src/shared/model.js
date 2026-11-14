@@ -12,8 +12,11 @@
   function getEdge(project, id) { return project.edges.find(function (e) { return e.id === id; }) || null; }
   function visibleNodes(project) {
     var f = project.settings.nodeFilter || {};
-    return project.nodes.filter(function (n) { return n.visible !== false && f[n.kind] !== false; });
+    return project.nodes.filter(function (n) {
+      return n.visible !== false && f[n.kind] !== false;
+    });
   }
+
   function visibleEdges(project, visibleIdSet) {
     var f = project.settings.edgeFilter || {};
     var set = visibleIdSet || new Set(visibleNodes(project).map(function (n) { return n.id; }));

@@ -1,0 +1,10 @@
+{
+  "ok": true,
+  "callerNodes": [
+    "GameInstaller(调用:Start)"
+  ],
+  "links": [
+    "GameInstaller -调用-> GameView",
+    "GameView -类型-> GameState"
+  ]
+}

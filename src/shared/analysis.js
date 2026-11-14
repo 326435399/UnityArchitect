@@ -165,8 +165,21 @@
    * - firers:      classes that raise it (`x?.Invoke()`, `x(...)`)
    * Each entry carries { id, name, methods: [..], details: [{ method, action, via, snippet }] }.
    */
+  /** 实例卡的 sourceKey 是 comp:...（v2.12 实例节点）。定义只认类节点，
+   *  从实例卡右键发起的字段/方法/事件追踪先把类型键归一化到它挂的脚本类。 */
+  function normalizeTypeKey(project, typeKey) {
+    var k = String(typeKey || '');
+    if (k.indexOf('comp:') !== 0) return k;
+    var inst = null;
+    project.nodes.forEach(function (n) {
+      if (!inst && n.kind === 'component' && n.sourceKey === k && n.classKey) inst = n;
+    });
+    return inst ? inst.classKey : k;
+  }
+
   function traceEvent(project, eventName, typeKey) {
     var name = String(eventName || '').trim();
+    typeKey = normalizeTypeKey(project, typeKey);
     var res = { event: name, typeKey: typeKey || '', definitions: [], subscribers: [], firers: [], details: [] };
     if (!name) return res;
     project.nodes.forEach(function (n) {
@@ -373,7 +386,8 @@
 
   function traceField(project, fieldName, typeKey) {
     var name = String(fieldName || '').trim();
-    var res = { field: name, definitions: [], writers: [], readers: [], sources: [], sinks: [], typeClasses: [], details: [] };
+    typeKey = normalizeTypeKey(project, typeKey);
+    var res = { field: name, definitions: [], writers: [], readers: [], callers: [], sources: [], sinks: [], typeClasses: [], details: [] };
     if (!name) return res;
     var byKey = Object.create(null), byId = Object.create(null);
     project.nodes.forEach(function (n) { byId[n.id] = n; if (n.sourceKey) byKey[n.sourceKey] = n; });
@@ -429,6 +443,35 @@
       entry.details = entry.details || [];
       entry.details.push({ method: it.member.name, action: u.action, via: u.via, snippet: u.snippet });
     });
+    // 写入方法的实际调用方（谁在什么时机触发写入）：GameInstaller.Start 调 view.Bind
+    // 才是 state 被写入的真正时机。这里用 collectRefs 的 call 记录（接收者已解析为
+    // 类才计入），而不是 callTargets——后者只保留简单标识符实参，像
+    // view.Bind(dataBase.Config) 这种成员链实参会被整个跳过。自调用不算触发方。
+    var allRefs = collectRefs(project);
+    var seenCaller = Object.create(null);
+    res.writers.forEach(function (w) {
+      var wNode = byId[w.id];
+      if (!wNode || !wNode.sourceKey) return;
+      (w.details || []).forEach(function (d) {
+        if (d.action !== 'write') return;
+        allRefs.forEach(function (it) {
+          var u = it.ref;
+          if (u.name !== d.method || u.action !== 'call' || u.type !== wNode.sourceKey) return;
+          if (!it.owner || it.owner.id === w.id) return;
+          var k = it.owner.id + '|' + it.member.name + '|' + d.method;
+          if (seenCaller[k]) return;
+          seenCaller[k] = true;
+          var entry = entryFor(res.callers, it.owner);
+          if (entry.methods.indexOf(it.member.name) < 0) entry.methods.push(it.member.name);
+          entry.details = entry.details || [];
+          entry.details.push({
+            method: it.member.name, action: 'call', callee: d.method, writerId: w.id,
+            via: u.via || '', snippet: u.snippet || ((u.via ? u.via + '.' : '') + d.method + '(…)')
+          });
+        });
+      });
+    });
+
     // Detail rows: group per class (definitions first, then writers, readers).
     var seenClass = Object.create(null);
     res.definitions.forEach(function (d) { seenClass[d.id] = true; });
@@ -438,6 +481,17 @@
       res.details.push({
         id: e.id, name: e.name, kindLabel: '使用',
         rows: (e.details || []).map(function (d) {
+          return { action: d.action, method: d.method, via: d.via, snippet: d.snippet };
+        })
+      });
+    });
+    // 调用方分组（类已作为声明/写入/读取出现过时不重复开组）。
+    res.callers.forEach(function (c) {
+      if (seenClass[c.id]) return;
+      seenClass[c.id] = true;
+      res.details.push({
+        id: c.id, name: c.name, kindLabel: '调用',
+        rows: (c.details || []).map(function (d) {
           return { action: d.action, method: d.method, via: d.via, snippet: d.snippet };
         })
       });
@@ -508,6 +562,7 @@
    */
   function traceMethod(project, methodName, typeKey) {
     var name = String(methodName || '').trim();
+    typeKey = normalizeTypeKey(project, typeKey);
     var res = { method: name, definitions: [], callers: [], readers: [], details: [] };
     if (!name) return res;
     project.nodes.forEach(function (n) {

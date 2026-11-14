@@ -70,8 +70,11 @@ try {
   var playerRoot = parsed.nodes.find(function (n) { return n.name === 'PlayerRoot'; });
   ok(playerRoot && playerRoot.kind === 'prefab', 'prefab root object gets the prefab kind', playerRoot && playerRoot.kind);
   var pTypes = playerRoot ? (playerRoot.components || []).map(function (c) { return c.type; }) : [];
-  ok(pTypes.indexOf('Transform') >= 0 && pTypes.indexOf('Rigidbody') >= 0 && pTypes.some(function (t) { return /PlayerController$/.test(t); }),
-    'prefab composition lists built-in components and scripts', pTypes);
+  ok(pTypes.indexOf('Transform') >= 0 && pTypes.indexOf('Rigidbody') >= 0 && pTypes.indexOf('PlayerController') < 0,
+    'prefab card lists built-in components only (scripts live on instance cards)', pTypes);
+  ok(parsed.edges.some(function (e) {
+    return e.kind === 'attach' && e.fromKey === playerRoot.sourceKey;
+  }), 'mounted script surfaces as attach edge to its instance card');
   ok(parsed.edges.some(function (e) {
     return e.kind === 'compose' && e.label === '预制体实例' && e.fromKey && e.toKey === playerRoot.sourceKey;
   }), 'scene prefab instance links to the prefab object');
@@ -236,6 +239,28 @@ try {
     eq(inOnly.counts.down, 0, 'side=in has no downstream');
     var outOnly = Layout.focusLayout(project, focusTarget.id, { depth: 1, side: 'out' });
     eq(outOnly.counts.up, 0, 'side=out has no upstream');
+    // instantiate 免费跳：GO 聚焦 1 跳就应同时包含挂载实例与脚本类（链条不断）
+    var goNode = project.nodes.find(function (n) { return n.kind === 'gameObject'; });
+    var goAttach = goNode && project.edges.find(function (e) { return e.kind === 'attach' && e.from === goNode.id; });
+    if (goNode && goAttach) {
+      var goInst = Model.getNode(project, goAttach.to);
+      var goCls = goInst && goInst.classKey &&
+        project.nodes.find(function (n) { return n.sourceKey === goInst.classKey; });
+      var goFl = Layout.focusLayout(project, goNode.id, { depth: 1, side: 'out' });
+      ok(goFl.ids.indexOf(goInst.id) >= 0, 'focus depth1 includes attached instance');
+      ok(!!goCls && goFl.ids.indexOf(goCls.id) >= 0,
+        'instantiate hop is free: script class rides along at the same depth', goFl.ids);
+      // 类的依赖仍是真实跳数：depth2 才能看到（depth1 不含）
+      var clsDep = project.edges.find(function (e) {
+        return e.from === goCls.id && e.kind !== 'instantiate' && e.kind !== 'attach' &&
+          e.to !== goInst.id && !goFl.ids.concat(goNode.id).includes(e.to);
+      });
+      if (clsDep) {
+        var goFl2 = Layout.focusLayout(project, goNode.id, { depth: 2, side: 'out' });
+        ok(goFl2.ids.indexOf(clsDep.to) >= 0,
+          'class dependencies appear at depth 2', { dep: clsDep.to, ids: goFl2.ids.length });
+      }
+    }
   }
 
   // event trace: definition / subscribe / fire columns
@@ -260,9 +285,10 @@ try {
     'script components carry the isScript flag');
   var prNode = project.nodes.find(function (n) { return n.name === 'PlayerRoot'; });
   var prMeasure = Layout.measureNode(prNode, { showMembers: true });
+  var prCompRows = prMeasure.rows.filter(function (r) { return r.kind === 'comp'; }).map(function (r) { return r.comp.type; });
   ok(prMeasure.rows.some(function (r) { return r.kind === 'group' && /组件/.test(r.text); }) &&
-     prMeasure.rows.filter(function (r) { return r.kind === 'comp'; }).length >= 3,
-    'GameObject card shows its component composition');
+     prCompRows.indexOf('Transform') >= 0 && prCompRows.indexOf('PlayerController') < 0,
+    'GameObject card lists built-in components, no duplicate script rows', prCompRows);
   var bigNode = { id: 'test:big#Big', name: 'Big', kind: 'class', members: [] };
   for (var bi = 0; bi < 55; bi++) bigNode.members.push({ id: bigNode.id + '#m' + bi, name: 'm' + bi, kind: 'field', access: 'private', type: 'int' });
   var bigCollapsed = Layout.measureNode(bigNode, { showMembers: true });
@@ -272,6 +298,37 @@ try {
   var bigExpanded = Layout.measureNode(bigNode, { showMembers: true, expanded: true });
   ok(bigExpanded.rows.filter(function (r) { return r.kind === 'member'; }).length === 55 && bigExpanded.rows.some(function (r) { return r.kind === 'more' && /收起/.test(r.text); }),
     'expanded card lists every member with a collapse row');
+  // 实例卡方法直接全部显示（用户反馈：折叠没意义还抢眼）
+  var instNode = { id: 'test:inst#1', name: 'GameView @Cube', kind: 'component', members: [
+    { id: 'test:inst#1#f1', name: 'state', kind: 'field', access: 'private', type: 'GameState' },
+    { id: 'test:inst#1#m1', name: 'Bind', kind: 'method', access: 'public', parameters: 'GameConfig cfg, GameState st', returnType: 'void' },
+    { id: 'test:inst#1#m2', name: 'OnGUI', kind: 'method', access: 'private', returnType: 'void' }
+  ] };
+  var instCard = Layout.measureNode(instNode, { showMembers: true });
+  ok(instCard.rows.some(function (r) { return r.kind === 'group' && r.text === '方法'; }) &&
+     instCard.rows.some(function (r) { return r.kind === 'member' && r.member.name === 'Bind'; }) &&
+     instCard.rows.some(function (r) { return r.kind === 'member' && r.member.name === 'OnGUI'; }) &&
+     !instCard.rows.some(function (r) { return r.kind === 'more'; }),
+    'instance card shows all method rows directly (no fold)', instCard.rows.filter(function (r) { return r.kind === 'more'; }));
+
+  // ---------------------------------------------------------------- display layer
+  section('display layer');
+  var instN = project.nodes.find(function (n) { return n.kind === 'component'; });
+  ok(!!instN && !!instN.classKey, 'component instance exists with classKey');
+  ok(Model.visibleNodes(project).some(function (n) { return n.id === instN.id; }),
+    'instance cards are always visible (no hide toggle)');
+  ok(S.createEmptyProject('x').settings.showInstances === undefined,
+    'obsolete showInstances setting is gone');
+  var rawAttach = project.edges.find(function (e) { return e.kind === 'attach' && e.to === instN.id; });
+  var rawSer = project.edges.find(function (e) { return e.kind === 'serialize' && e.from === instN.id; });
+  var visE = Model.visibleEdges(project);
+  ok(!!rawAttach && visE.some(function (e) { return e.id === rawAttach.id; }),
+    'attach edge keeps pointing at the instance card');
+  ok(!!rawSer && visE.some(function (e) { return e.id === rawSer.id && e.from === instN.id; }),
+    'instance keeps its component-level serialize edge');
+  var cfgTrace = Analysis.traceField(project, 'config', instN.sourceKey);
+  eq(cfgTrace.definitions.length, 1, 'traceField normalizes comp: typeKey to its class', cfgTrace.definitions);
+  eq(cfgTrace.definitions[0].name, 'PlayerController', 'normalized trace targets the declaring class');
   var trace = Analysis.traceEvent(project, 'onGameOver');
   eq(trace.definitions.length, 1, 'trace finds one definition');
   ok(trace.subscribers.some(function (s) { return s.name === 'HudView'; }), 'trace finds subscriber HudView');
@@ -552,6 +609,18 @@ try {
   var flowUp = Analysis.traceField(project, 'bound', dataBinderNode.sourceKey);
   ok(flowUp.sources.some(function (s) { return s.name === 'GameRoot'; }),
     'bound sources reach back to GameRoot.db', flowUp.sources);
+  // Caller chain: GameRoot.Start calls DataBinder.Bind, which writes `bound` —
+  // the field trace must surface Start as the trigger of the write.
+  eq(flowUp.callers.length, 1, 'bound write method has exactly one caller class', flowUp.callers);
+  var caller = flowUp.callers[0];
+  ok(caller && caller.name === 'GameRoot' &&
+     caller.details.some(function (d) { return d.method === 'Start' && d.callee === 'Bind' && d.writerId === dataBinderNode.id; }),
+    'caller is GameRoot.Start triggering DataBinder.Bind', flowUp.callers);
+  ok(caller && /binder\.Bind\(db\)/.test(caller.details[0].snippet || ''),
+    'caller snippet shows the actual call expression', flowUp.callers);
+  ok(flowUp.details.some(function (g) { return g.id === caller.id && g.kindLabel === '调用' &&
+      g.rows.some(function (r) { return r.action === 'call' && r.method === 'Start'; }); }),
+    'caller group appears in trace details', flowUp.details);
   // SO resource origin: prefab field `config` serializes the DefaultHealth asset.
   var flowRes = Analysis.traceField(project, 'config', pcNode.sourceKey);
   ok(flowRes.sources.some(function (s) { return s.name === 'DefaultHealth' && /SO 资源/.test(s.detail || ''); }),

@@ -199,18 +199,25 @@
     var incoming = Object.create(null), outgoing = Object.create(null);
     project.edges.forEach(function (e) {
       if (!byId[e.from] || !byId[e.to] || e.from === e.to) return;
-      (outgoing[e.from] = outgoing[e.from] || []).push(e.to);
-      (incoming[e.to] = incoming[e.to] || []).push(e.from);
+      (outgoing[e.from] = outgoing[e.from] || []).push({ id: e.to, kind: e.kind });
+      (incoming[e.to] = incoming[e.to] || []).push({ id: e.from, kind: e.kind });
     });
+
+    // 实例→类（instantiate）是「同一个东西的两个面」，不算真实依赖跳数：
+    // GO -挂载→ 实例 -实例化→ 类 → 类的依赖 在同一深度层级完整呈现，链条不断。
+    function hopCost(e2) { return e2.kind === 'instantiate' ? 0 : 1; }
 
     function bfs(adj) {
       var dist = Object.create(null), queue = [{ id: focusId, d: 0 }];
       dist[focusId] = 0;
       while (queue.length) {
         var cur = queue.shift();
-        if (cur.d >= depth) continue;
-        (adj[cur.id] || []).forEach(function (nxt) {
-          if (dist[nxt] === undefined) { dist[nxt] = cur.d + 1; queue.push({ id: nxt, d: cur.d + 1 }); }
+        // 不按深度短路：达到 depth 的节点仍要走「免费跳」（实例↔类），
+        // 真实依赖 nd > depth 会被下面的边界检查挡住。
+        (adj[cur.id] || []).forEach(function (e2) {
+          var nd = Math.max(1, cur.d + hopCost(e2)); // 免费跳不把邻居压进焦点列（dist ≥ 1）
+          if (nd > depth) return;
+          if (dist[e2.id] === undefined || dist[e2.id] > nd) { dist[e2.id] = nd; queue.push({ id: e2.id, d: nd }); }
         });
       }
       delete dist[focusId];
@@ -249,20 +256,68 @@
 
     var positions = Object.create(null), ids = [];
     var gapCol = opts.gapX || 170;
+    var PAIR_GAP = 56; // 实例卡 → 类卡 的「实例化」短线间距
+    // 列内「实例↔类」配对：CO 实例卡与它的 C# 类卡左右相邻、同一行垂直居中对齐，
+    // GO →挂载→ 实例 →实例化→ 类 的传递一眼可读（实例卡排左子列，类卡排右子列）。
+    var bySourceKey = Object.create(null);
+    project.nodes.forEach(function (n) { if (n.sourceKey) bySourceKey[n.sourceKey] = n; });
+
+    function columnRows(col) {
+      var items = col.items;
+      var instToCls = Object.create(null), claimedCls = Object.create(null);
+      items.forEach(function (n) {
+        if (n.kind !== 'component' || !n.classKey) return;
+        var cls = bySourceKey[n.classKey];
+        if (cls && !claimedCls[cls.id] && items.some(function (m) { return m.id === cls.id; })) {
+          instToCls[n.id] = cls;
+          claimedCls[cls.id] = true;
+        }
+      });
+      var rows = [];
+      items.forEach(function (n) {
+        if (claimedCls[n.id]) return; // 已与实例配对，跟实例同行放置
+        rows.push({ main: n, pair: instToCls[n.id] || null });
+      });
+      return rows;
+    }
+
+    function rowH(r) {
+      var h = sizeOf(r.main).h;
+      if (r.pair) h = Math.max(h, sizeOf(r.pair).h);
+      return h;
+    }
+
     var x = 0;
     columns.forEach(function (col) {
-      var colW = 220;
-      col.items.forEach(function (n) { colW = Math.max(colW, sizeOf(n).w); });
+      if (col.dir === 'focus') {
+        var fw = Math.max(220, sizeOf(byId[focusId]).w);
+        positions[focusId] = { x: x, y: -sizeOf(byId[focusId]).h / 2 };
+        ids.push(focusId);
+        x += fw + gapCol;
+        return;
+      }
+      var rows = columnRows(col);
+      if (!rows.length) return;
+      var mainW = 220, pairW = 0;
+      rows.forEach(function (r) {
+        mainW = Math.max(mainW, sizeOf(r.main).w);
+        if (r.pair) pairW = Math.max(pairW, sizeOf(r.pair).w);
+      });
       var totalH = 0;
-      col.items.forEach(function (n) { totalH += sizeOf(n).h + GAP_Y; });
+      rows.forEach(function (r) { totalH += rowH(r) + GAP_Y; });
       totalH = Math.max(0, totalH - GAP_Y);
       var y = -totalH / 2;
-      col.items.forEach(function (n) {
-        positions[n.id] = { x: x, y: y };
-        ids.push(n.id);
-        y += sizeOf(n).h + GAP_Y;
+      rows.forEach(function (r) {
+        var h = rowH(r);
+        positions[r.main.id] = { x: x, y: y + (h - sizeOf(r.main).h) / 2 };
+        ids.push(r.main.id);
+        if (r.pair) {
+          positions[r.pair.id] = { x: x + mainW + PAIR_GAP, y: y + (h - sizeOf(r.pair).h) / 2 };
+          ids.push(r.pair.id);
+        }
+        y += h + GAP_Y;
       });
-      if (col.items.length) x += colW + gapCol;
+      x += mainW + (pairW ? PAIR_GAP + pairW : 0) + gapCol;
     });
 
     return {
@@ -330,7 +385,7 @@
     ]);
   }
 
-  /** Field/property references: 字段类型 | 声明 | 写入 | 读取 columns. `res` = Analysis.traceField. */
+  /** Field/property references: 字段类型 | 声明 | 触发 | 写入 | 读取 columns. `res` = Analysis.traceField. */
   function fieldTraceLayout(project, res) {
     function pick(entries) {
       return (entries || []).filter(function (e) { return e && e.id; }).map(function (e) { return { id: e.id }; });
@@ -338,6 +393,7 @@
     return traceLayout(project, [
       { label: '字段类型', items: pick(res.typeClasses) },
       { label: '声明', items: pick(res.definitions) },
+      { label: '触发', items: pick(res.callers) },
       { label: '写入', items: pick(res.writers) },
       { label: '读取', items: pick(res.readers) }
     ]);

@@ -182,9 +182,15 @@
     UI.renderLeft(app); UI.renderRight(app);
   };
 
+  // 把右键命中转成固定选中用的轻量快照（去掉 geo/world 等临时引用）
+  function pinSnapshot(hit) {
+    return { type: hit.type, nodeId: hit.nodeId, id: hit.id || '',
+      comp: hit.comp ? { type: hit.comp.type, fileId: hit.comp.fileId } : null };
+  }
+
   app.onContextMenu = function (x, y, hit) {
     var items = [];
-    if (hit.type === 'node' || hit.type === 'member') {
+    if (hit.type === 'node' || hit.type === 'member' || hit.type === 'comp') {
       // 右键即选中：菜单里的定位/聚焦/追踪都以被右键的节点为准。
       app.setSelection(new Set([hit.nodeId]), null, hit.type === 'member' ? hit.id : null);
       var n = Model.getNode(project, hit.nodeId);
@@ -208,7 +214,11 @@
         items.push({ label: '事件追踪 · ' + mem.name, action: 'trace-event',
           data: { event: mem.name, type: n.sourceKey || '' } });
       }
-      items.push({ sep: true }, { label: '隐藏节点', action: 'toggle-visible', data: { id: hit.nodeId } });
+      items.push({ sep: true },
+        // 固定选中：钉住该行/卡的悬停对应高亮，平移缩放不丢；再点同一目标即解锁
+        { label: canvas && canvas.isPinned(hit) ? '解锁选中' : '固定选中',
+          action: 'pin-selection', data: pinSnapshot(hit), key: 'P' },
+        { label: '隐藏节点', action: 'toggle-visible', data: { id: hit.nodeId } });
     } else if (hit.type === 'edge') {
       items = [
         { label: '查看关系', action: 'select-edge', data: { id: hit.id } }
@@ -334,6 +344,7 @@
       var text = FOCUS_ROLE[e.kind] || '引用';
       var memberName = e.label && (node.members || []).some(function (m) { return m.name === e.label; })
         ? e.label : null;
+      if (e.sourceComp && node.kind !== 'component') text = text + ' · ' + e.sourceComp;
       addRole(roles, holder, text, memberName);
     });
     return roles;
@@ -354,8 +365,8 @@
       var text = FOCUS_ROLE[e.kind] || '引用';
       var memberName = e.label && (node.members || []).some(function (m) { return m.name === e.label; })
         ? e.label : null;
-      // GameObject 引用方：徽章落到「发起引用的组件行」，文字显示字段名
-      //（如 MerchantController 行 → playerTransform），而不是无信息的对象头部徽章
+      // GameObject 引用方：徽章落到「发起引用的组件行」（MerchantController 行 → playerTransform），
+      // 而不是无信息的对象头部徽章
       if (e.sourceComp && goLike(node)) addRole(roles, e.from, e.label || text, e.sourceComp);
       else addRole(roles, e.from, text, memberName);
       // 对象级引用：在「被引用的对象」卡片上，给被指向的那个组件行挂徽章；
@@ -599,14 +610,28 @@
     exitModeSilent(); traceSnapshot();
     var defId = res.definitions[0].id;
     var roles = Object.create(null), links = [];
+    var seenLink = Object.create(null);
+    function pushLink(from, to, label, color) {
+      var k = from + '|' + to + '|' + label;
+      if (seenLink[k]) return;
+      seenLink[k] = true;
+      links.push({ from: from, to: to, label: label, color: color });
+    }
     res.definitions.forEach(function (d) { addRole(roles, d.id, '定义', fieldName); });
     res.writers.forEach(function (w) {
       (w.details || []).forEach(function (d) { addRole(roles, w.id, '写入', d.method); });
-      if (w.id !== defId) links.push({ from: w.id, to: defId, label: '写入', color: ROLE_TONE['写入'] });
+      if (w.id !== defId) pushLink(w.id, defId, '写入', ROLE_TONE['写入']);
     });
     res.readers.forEach(function (r) {
       (r.details || []).forEach(function (d) { addRole(roles, r.id, '读取', d.method); });
-      if (r.id !== defId) links.push({ from: r.id, to: defId, label: '读取', color: ROLE_TONE['读取'] });
+      if (r.id !== defId) pushLink(r.id, defId, '读取', ROLE_TONE['读取']);
+    });
+    // 触发方：写入方法的实际调用者（如 GameRoot.Start 调 binder.Bind）。
+    res.callers.forEach(function (c) {
+      (c.details || []).forEach(function (d) {
+        addRole(roles, c.id, '调用', d.method);
+        if (d.writerId && c.id !== d.writerId) pushLink(c.id, d.writerId, '调用', ROLE_TONE['调用']);
+      });
     });
     (res.typeClasses || []).forEach(function (tc) {
       addRole(roles, tc.id, '字段类型', null);
@@ -618,11 +643,13 @@
     app.trace = { kind: 'field', name: fieldName, type: typeKey || '' };
     app.traceDetail = {
       title: '所有引用 · 「' + fieldName + '」',
-      stat: '声明 ' + res.definitions.length + ' · 写入 ' + res.writers.length + ' · 读取 ' + res.readers.length,
+      stat: '声明 ' + res.definitions.length + ' · 写入 ' + res.writers.length +
+        ' · 读取 ' + res.readers.length + ' · 触发 ' + res.callers.length,
       groups: res.details
     };
     UI.toast('数据流向「' + fieldName + '」· 声明 ' + res.definitions.length +
-      ' · 写入 ' + res.writers.length + ' · 读取 ' + res.readers.length + '（再点一次退出）');
+      ' · 写入 ' + res.writers.length + ' · 读取 ' + res.readers.length +
+      ' · 触发 ' + res.callers.length + '（再点一次退出）');
     UI.syncToolbar(app);
   }
 
@@ -850,7 +877,8 @@
     '<li>检查器里每个成员旁都有按钮：变量/属性 ⇥、事件 ⚡、方法 ⇥；点击即在画布上把<b>所有引用位置</b>聚拢成列，并在右侧列出每个引用的<b>类、方法与代码行</b>（就像 VS 的「查找所有引用」结果列表）；<b>右键成员行</b>的菜单里也有同样的入口，或用快捷键 <b>T</b> 对选中节点的字段开数据流向</li>',
     '<li><b>事件追踪 ⚡</b>：只追踪你点的那个类里的事件，两个类都写了同名的 <code>Changed</code> 也不会串（如 <code>G1State.Changed</code> 与 <code>TowerGameState.Changed</code> 各自独立）</li>',
     '<li>追踪时节点上直接标角色：<b>定义 / 激活</b> 标在声明并触发它的类上，<b>注册</b> 标在调用它的方法（如 <code>Bind</code>）旁边，并画出「注册 / 激活 → 定义」的箭头；激活发生在别的类时同样补一条箭头</li>',
-    '<li><b>数据流向 ⇥</b>：列依次是「字段类型」（最左，这个字段指向的对象）、「声明」（含初始值）、「写入」、「读取」；即使引用都发生在同一个类里，也能看到它指向的类型对象</li>',
+    '<li><b>数据流向 ⇥</b>：列依次是「字段类型」（最左，这个字段指向的对象）、「声明」（含初始值）、「触发」（写入方法的实际调用方，如 <code>Start</code> 里调了 <code>Bind</code>）、「写入」、「读取」；即使引用都发生在同一个类里，也能看到它指向的类型对象</li>',
+    '<li><b>实例卡（Co）⇥</b>：脚本挂在对象上会单独成一张实例卡——「挂载」虚线从对象连到实例，序列化引用从实例卡出发、指向它真正持有的对象；同一脚本挂在多个宿主上时，各自的引用归属分得清</li>',
     '<li><b>方法 ⇥</b>：左列「定义」、右列「调用」；方法组引用（如 <code>+= Refresh</code>）也算一处引用。只按接收者类型归因——解析不了接收者的引用（反射、局部变量上的调用）一律不计入，工具类里的 <code>set.Contains(...)</code> 不会被误算成别的类的同名方法</li>',
     '<li>再点一次同一按钮（或 Esc）退出追踪并还原布局</li>',
     '</ul>',
@@ -862,8 +890,9 @@
     '<h4>五、画布操作</h4>',
     '<ul style="padding-left:18px">',
     '<li>工具栏 <b>事件 / 协程 / UnityEvent / 委托</b> 四个高亮开关：点亮的类别成员文字变醒目颜色并加粗，再点一次恢复</li>',
-    '<li>聚焦依赖 / 事件追踪 / 数据流向 / Assembly 分层 / 孤立选中 是<b>互斥模式</b>：切入新模式时旧模式自动退出还原，当前模式按钮持续发光；再点一次（或 Esc）退出</li>',
+    '<li>聚焦依赖 / 事件追踪 / 数据流向 / Assembly 分层 / 孤立选中 是<b>互斥模式</b>：切入新模式时旧模式自动退出还原，当前模式按钮持续发光；再点一次（或 Esc）退出。聚焦依赖默认 2 跳：<b>「实例化」不占跳数</b>——GO → 挂载 → 实例 → 类 → 类的依赖 一条链完整呈现，检查器里可切 1/2/3 跳</li>',
     '<li>右键菜单：<b>定位到（F）</b>、<b>聚焦依赖 / 取消聚焦依赖（G）</b>、<b>数据流向（T）</b>、<b>溯源根（R）</b>；右键到成员行时追踪直接对准该成员</li>',
+    '<li><b>固定选中（图钉）</b>：右键成员行 / 组件行 / 整卡 → <b>固定选中</b>，把当前的对应高亮钉住——鼠标移开、平移、缩放后引用线和邻居徽章都不丢，缩放很远也能顺着高亮的线找回来；<b>固定其他成员会自动换钉</b>，右键同一目标 / 快捷键 <b>P</b> / <b>Esc</b> 均可解锁</li>',
     '<li><b>溯源根</b>：左列数据根（SO 资产 = 根·资产，无出边的代码叶子 = 根·叶），右列最终消费者；引用 SO 脚本类时根自动定位到 .asset 实例；循环引用明确报「循环 N 处」；中间节点同样标出「谁的哪个成员在引用」（组合 / 聚合 / 依赖 / 引用徽章），与数据流向保持一致</li>',
     '<li><b>项目体检（工具栏「体检」或快捷键 H）</b>：一键诊断循环依赖、耦合中心（被引用最多的类）、上帝类（成员过多）、孤立脚本、空壳类型、缺命名空间、失效节点，给出健康分与逐条清单；<b>点击环条目进入环形视图</b>——环内的类排成一圈、关系线用红色强调，再点一次退出；其余条目点击即选中并飞到该节点</li>',
     '<li>滚轮缩放、空白处拖动平移、节点拖拽移动、框选多选、双击节点定位；Ctrl+K 全局检索、Ctrl+A 全选、F 适应画布、Esc 退出当前模式</li>',
@@ -917,6 +946,21 @@
         if (canvas) canvas.fit(); UI.toast('布局已更新');
         break;
       case 'select-edge': app.setSelection(new Set(), id, null); app.setTab('right', 'inspector'); break;
+      case 'pin-selection': {
+        if (!canvas) break;
+        if (canvas.isPinned(data)) { canvas.setPinned(null); UI.toast('已解锁选中'); break; }
+        canvas.setPinned(data);
+        var pn = Model.getNode(project, data && data.nodeId);
+        var pinLabel = pn ? pn.name : ((data && data.nodeId) || '');
+        if (data && data.type === 'member' && pn) {
+          var pm = (pn.members || []).find(function (x) { return x.id === data.id; });
+          if (pm) pinLabel += ' · ' + pm.name;
+        } else if (data && data.type === 'comp' && data.comp && data.comp.type) {
+          pinLabel += ' · ' + data.comp.type;
+        }
+        UI.toast('已固定选中：' + pinLabel + '（右键同一目标 / P / Esc 解锁）', 3800);
+        break;
+      }
       case 'goto':
         if (!id) break;
         app.setSelection(new Set([id]), null, null);
@@ -942,12 +986,12 @@
         if (!app.selection.size) { UI.toast('请先选中一个节点'); break; }
         var fid = Array.from(app.selection)[0];
         if (app.canvasMode === 'focus') { exitFocusLayout(); break; }
-        applyFocusLayout(fid, 1, 'both');
+        applyFocusLayout(fid, 2, 'both');
         break;
       }
       case 'focus-side': {
         if (!app.selection.size) { UI.toast('请先选中一个节点'); break; }
-        applyFocusLayout(Array.from(app.selection)[0], 1, (data && data.id) === 'in' ? 'in' : 'out');
+        applyFocusLayout(Array.from(app.selection)[0], 2, (data && data.id) === 'in' ? 'in' : 'out');
         break;
       }
       case 'unfocus': exitFocusLayout(); break;
@@ -1140,7 +1184,7 @@
               (a.repo ? '<div style="margin-top:4px"><a href="' + esc(a.repo.replace(/^开源地址[：:]\s*/, '')) + '" target="_blank" rel="noopener" style="color:var(--accent)">' + esc(a.repo) + '</a></div>' : '') +
               (a.license ? '<div style="margin-top:4px;color:var(--text3)">' + esc(a.license) + '</div>' : '') +
               '</div>' : '') +
-          '<p style="margin-top:8px;color:var(--text3)">快捷键：Ctrl+K 检索 · Ctrl+A 全选 · F 定位/适应 · G 聚焦 · T 数据流向 · R 溯源根 · H 体检 · L 布局 · Esc 退出当前模式</p>',
+          '<p style="margin-top:8px;color:var(--text3)">快捷键：Ctrl+K 检索 · Ctrl+A 全选 · F 定位/适应 · G 聚焦 · T 数据流向 · R 溯源根 · H 体检 · <b>I 孤立选中</b> · <b>P 固定选中</b> · L 布局 · Esc 退出当前模式</p>',
           buttons: [{ label: '关闭', primary: true }] });
         break;
       }
@@ -1161,7 +1205,12 @@
       }
       if (ctrl && e.key.toLowerCase() === 'a') { e.preventDefault(); app.setSelection(new Set(project.nodes.map(function (n) { return n.id; }))); return; }
       if (typing) return;
-      if (e.key === 'Escape') { action('unfocus'); UI.hideContext(); return; }
+      if (e.key === 'Escape') {
+        // Esc：先解锁固定选中，再退出当前模式
+        if (canvas && canvas.getPinned()) { canvas.setPinned(null); UI.toast('已解锁选中'); }
+        else { action('unfocus'); }
+        UI.hideContext(); return;
+      }
       var k = e.key.toLowerCase();
       if (k === 'f') {
         // F：定位到当前选中节点；没有选中时退化为适应画布。
@@ -1174,6 +1223,17 @@
       if (k === 'r') { action('trace-root'); return; }  // R：数据溯源（根在左 / 消费者在右）
       if (k === 'l') { action('layout-layered'); return; }
       if (k === 'h') { action('health'); return; }  // H：项目体检 / 退出环视图
+      if (k === 'i') { action('isolate'); return; } // I：孤立选中 ⇄ 还原
+      if (k === 'p') {
+        // P：固定/解锁选中（优先成员行，其次整卡）；固定后平移缩放高亮不丢
+        if (canvas && canvas.getPinned()) { action('pin-selection', canvas.getPinned()); return; }
+        var pid = Array.from(app.selection)[0];
+        if (!pid) { UI.toast('先选中要固定的成员或节点'); return; }
+        action('pin-selection', app.selectedMemberId
+          ? { type: 'member', nodeId: pid, id: app.selectedMemberId }
+          : { type: 'node', nodeId: pid, id: pid });
+        return;
+      }
     });
   }
 

@@ -6,6 +6,20 @@ const path = require('path');
 
 const root = path.join(__dirname, '..');
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+// 版本号以 src/shared/schema.js 的 APP_VERSION 为唯一来源：zip 名、package.json 都自动对齐，
+// 避免出现「界面已 v2.12.1、压缩包还叫 v2.10」的脱节。
+const schemaSrc = fs.readFileSync(path.join(root, 'src', 'shared', 'schema.js'), 'utf8');
+const appVersion = (schemaSrc.match(/APP_VERSION\s*=\s*'([^']+)'/) || [])[1];
+if (appVersion) {
+  if (pkg.version !== appVersion) {
+    pkg.version = appVersion;
+    fs.writeFileSync(path.join(root, 'package.json'),
+      JSON.stringify(pkg, null, 2) + '\n');
+    console.log('[版本] package.json 已同步为 v' + appVersion + '（以 schema.js 的 APP_VERSION 为准）');
+  }
+} else {
+  console.warn('[警告] 未能从 schema.js 读取 APP_VERSION，zip 将使用 package.json 的 v' + pkg.version);
+}
 const started = Date.now();
 
 function run(label, args) {

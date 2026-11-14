@@ -2,25 +2,22 @@
   "ok": true,
   "setup": {
     "ok": true,
-    "target": "CycleA",
+    "target": "PlayerController @PlayerRoot",
     "mode": "root"
   },
   "hoverEdge": {
     "ok": true,
-    "edge": "CycleA.goB -> CycleGoB.Transform",
+    "edge": "PlayerController @PlayerRoot.config -> DefaultHealth",
     "litEdges": 1,
     "litRows": [
-      "node_mwey9dei_b_xohbk|member:goB",
-      "node_mwey9dei_a_qo5t0|comp:Transform"
+      "node_mwg5k8of_e_nswj3|member:config",
+      "node_mwg5k8of_c_u33qf|card:"
     ]
   },
   "hoverComp": {
     "ok": true,
-    "hovered": "CycleGoB.Transform",
+    "hovered": "EventSystem.Transform",
     "litEdges": 1,
-    "litRows": [
-      "node_mwey9dei_b_xohbk|member:goB",
-      "node_mwey9dei_a_qo5t0|comp:Transform"
-    ]
+    "litRows": []
   }
 }
